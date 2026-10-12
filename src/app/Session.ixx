@@ -185,6 +185,7 @@ export namespace oa
         std::vector<Tab> tabs;
         int activeTab = -1;
         int assetSort = 0;               // 0 file order, 1 name A-Z, 2 name Z-A, 3 type
+        std::string ignoredUpdate;       // release the user chose to ignore: no dialog for it, the title and Help still show it
         bool checkUpdates = true;        // ask GitHub for a newer release at startup
         int accentTheme = 0;             // index into ui::AccentThemes(), 0 = Treyarch
         bool showPreviewInfo = true;     // the debug/info text in the corner of the preview
@@ -230,6 +231,7 @@ export namespace oa
                 else if (k == "preview.info") showPreviewInfo = v != "0";
                 else if (k == "theme") accentTheme = std::max(0, std::stoi(v));
                 else if (k == "updates.check") checkUpdates = v != "0";
+                else if (k == "updates.ignored") ignoredUpdate = v;
             }
         }
 
@@ -247,6 +249,7 @@ export namespace oa
             out += std::string("preview.info=") + (showPreviewInfo ? "1" : "0") + "\n";
             out += "theme=" + std::to_string(accentTheme) + "\n";
             out += std::string("updates.check=") + (checkUpdates ? "1" : "0") + "\n";
+            out += "updates.ignored=" + ignoredUpdate + "\n";
             WriteTextFile(settingsPath, out);
         }
 

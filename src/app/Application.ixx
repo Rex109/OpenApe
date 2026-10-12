@@ -100,6 +100,7 @@ export namespace oa
                 else if (a == "--raw-anim") m_shotRawAnim = argv[i + 1];
                 else if (a == "--then") m_testThen = argv[i + 1];
                 else if (a == "--run-convert") m_testConvert = argv[i + 1];
+                else if (a == "--fake-update") { UpdateChecker::Result r; r.state = UpdateChecker::State::Available; r.latest = argv[i + 1]; r.url = "https://github.com/Rex109/OpenApe/releases"; m_update.SetResultForTest(r); }
                 else if (a == "--rename") m_testRename = argv[i + 1];
                 else if (a == "--reload-at") m_testReloadAt = std::atoi(argv[i + 1]);
                 else if (a == "--weapon-anim") m_preview->SetWeaponAnim(argv[i + 1]);
@@ -305,7 +306,7 @@ export namespace oa
         }
 
         // ------------------------------------------------------------------ callbacks / dialogs
-        enum class Modal { None, NewEntry, Duplicate, Rename, Delete, Quit, Message, About, Compiled };
+        enum class Modal { None, NewEntry, Duplicate, Rename, Delete, Quit, Message, About, Compiled, Update };
 
         void Message(const std::string& text) { m_modal = Modal::Message; m_modalText = text; m_modalOpen = true; }
 
@@ -348,7 +349,7 @@ export namespace oa
             if (m_modalOpen) { ImGui::OpenPopup("##modal"); m_modalOpen = false; }
             ImVec2 centre = ImGui::GetMainViewport()->GetCenter();
             ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-            const char* titles[] = { "", "New Asset", "Duplicate Asset", "Rename Asset", "Delete Asset", "Unsaved changes", "Asset Manager", "About OpenApe", "Compiled Assets (raw)" };
+            const char* titles[] = { "", "New Asset", "Duplicate Asset", "Rename Asset", "Delete Asset", "Unsaved changes", "Asset Manager", "About OpenApe", "Compiled Assets (raw)", "Update available" };
             std::string title = std::string(titles[(int)m_modal]) + "##modal";
             if (m_modal == Modal::None) return;
             ImGui::SetNextWindowSizeConstraints(ImVec2(ui::Theme::S(380), 0), ImVec2(ui::Theme::S(640), ui::Theme::S(600)));
@@ -452,6 +453,30 @@ export namespace oa
             case Modal::Compiled:
                 DrawCompiledPicker(w);
                 break;
+            case Modal::Update:
+            {
+                auto upd = m_update.Get();
+                ImGui::Text("Version %s is available.", upd.latest.c_str());
+                ImGui::TextDisabled("You are running %s.", version::kVersion);
+                ImGui::Spacing();
+                ImGui::Spacing();
+                bool canDownload = UpdateChecker::SafeUrl(upd.url);
+                ImGui::BeginDisabled(!canDownload);
+                if (ImGui::Button("Download", ImVec2(w, 0))) { platform::OpenInShell(upd.url); ImGui::CloseCurrentPopup(); m_modal = Modal::None; }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("Ignore for now", ImVec2(w * 1.5f, 0))) { ImGui::CloseCurrentPopup(); m_modal = Modal::None; }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close this; it appears again at the next launch");
+                ImGui::SameLine();
+                if (ImGui::Button("Skip this version", ImVec2(w * 1.5f, 0)))
+                {
+                    m_session.ignoredUpdate = upd.latest;
+                    m_session.SaveSettings();
+                    ImGui::CloseCurrentPopup(); m_modal = Modal::None;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Never show this dialog for this version (it stays in the title and the Help menu)");
+                break;
+            }
             case Modal::About:
                 ImGui::TextUnformatted("OpenApe - an open reimplementation of the Call of Duty 4 Asset Manager.");
                 ImGui::TextDisabled("Dear ImGui + Direct3D 9. Reads deffiles/*.gdf and *.gdt like the original tool.");
@@ -615,13 +640,20 @@ export namespace oa
             if (upd.state == UpdateChecker::State::Available) t += "  |  update available: " + upd.latest;
             if (m_session.project.IsOpen()) t += "  |  " + m_session.project.Root().string();
             if (m_session.project.AnyDirty()) t += " *";
+            if (m_updateDialogPending && m_modal == Modal::None)
+            {
+                m_updateDialogPending = false;
+                m_modal = Modal::Update; m_modalOpen = true;
+            }
             if (upd.state != m_lastUpdateState)
             {
                 m_lastUpdateState = upd.state;
                 if (upd.state == UpdateChecker::State::Available && !m_updateAnnounced)
                 {
                     m_updateAnnounced = true;
-                    m_session.Notify("Version " + upd.latest + " is available (you have " + version::kVersion + ") - see Help > Check for updates", 10);
+                    // a dialog offers the download; a release the user chose to ignore only shows in the title and the Help menu
+                    if (m_updateManual || upd.latest != m_session.ignoredUpdate) m_updateDialogPending = true;
+                    m_updateManual = false;
                 }
                 else if (m_updateManual && (upd.state == UpdateChecker::State::UpToDate || upd.state == UpdateChecker::State::NoRelease || upd.state == UpdateChecker::State::Failed))
                 {
@@ -1000,7 +1032,7 @@ export namespace oa
         bool m_inSizeMove = false, m_inFrame = false;
         UpdateChecker m_update;
         UpdateChecker::State m_lastUpdateState = UpdateChecker::State::Idle;
-        bool m_updateAnnounced = false, m_updateManual = false;
+        bool m_updateAnnounced = false, m_updateManual = false, m_updateDialogPending = false;
 
         Renderer m_renderer;
         Session m_session;

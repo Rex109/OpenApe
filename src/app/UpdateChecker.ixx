@@ -43,6 +43,9 @@ export namespace oa
             m_worker = std::thread([this] { Run(); });
         }
 
+        // for scripted checks of the dialog
+        void SetResultForTest(Result r) { std::lock_guard<std::mutex> lock(m_mutex); m_result = std::move(r); }
+
         Result Get() const { std::lock_guard<std::mutex> lock(m_mutex); return m_result; }
 
         // The release page may only be opened when it really is on github.com (the text comes from the network).
