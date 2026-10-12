@@ -57,6 +57,7 @@ export namespace oa
             io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
             float dpi = ImGui_ImplWin32_GetDpiScaleForHwnd(m_hwnd);
             ui::Theme::Apply(dpi);
+            ui::Theme::SetAccent(m_session.accentTheme);
             ImGui_ImplWin32_Init(m_hwnd);
             ImGui_ImplDX9_Init(m_renderer.Device());
 
@@ -81,6 +82,7 @@ export namespace oa
                 else if (a == "--pitch") m_preview->SetPitch((float)std::atof(argv[i + 1]));
                 else if (a == "--preset") m_preview->SetPreset(std::atoi(argv[i + 1]));
                 else if (a == "--sky") m_preview->SetSky(argv[i + 1]);
+                else if (a == "--theme") { m_session.accentTheme = std::atoi(argv[i + 1]); ui::Theme::SetAccent(m_session.accentTheme); }
                 else if (a == "--zoom") m_preview->SetZoom((float)std::atof(argv[i + 1]));
                 else if (a == "--edit") m_testEdit = argv[i + 1];
                 else if (a == "--log") m_testLog = argv[i + 1];
@@ -143,7 +145,7 @@ export namespace oa
             wc.hIcon = (HICON)LoadImageA(wc.hInstance, "IDI_ICON1", IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
             wc.hIconSm = (HICON)LoadImageA(wc.hInstance, "IDI_ICON1", IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED);
             RegisterClassExA(&wc);
-            m_hwnd = CreateWindowExA(0, wc.lpszClassName, "Asset Property Editor", WS_OVERLAPPEDWINDOW, 100, 100, 1500, 900,
+            m_hwnd = CreateWindowExA(0, wc.lpszClassName, "Asset Property Editor (OpenApe)", WS_OVERLAPPEDWINDOW, 100, 100, 1500, 900,
                                      nullptr, nullptr, wc.hInstance, this);
             if (m_hwnd)
             {
@@ -550,7 +552,7 @@ export namespace oa
 
         void UpdateTitle()
         {
-            std::string t = "Asset Property Editor";
+            std::string t = "Asset Property Editor (OpenApe)";
             if (m_session.project.IsOpen()) t += " - " + m_session.project.Root().string();
             if (m_session.project.AnyDirty()) t += " *";
             if (t != m_title) { m_title = t; SetWindowTextA(m_hwnd, t.c_str()); }
@@ -629,6 +631,23 @@ export namespace oa
                 if (ImGui::MenuItem("Close Tab", "Ctrl+W", false, !m_session.tabs.empty())) m_session.CloseTab(m_session.activeTab);
                 ImGui::Separator();
                 if (ImGui::MenuItem("Reset Layout")) { m_session.leftWidth = 0.30f; m_session.previewHeight = 0.34f; m_session.filtersHeight = 0.20f; }
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Theme"))
+            {
+                const auto& themes = ui::AccentThemes();
+                for (int i = 0; i < (int)themes.size(); ++i)
+                {
+                    // a small swatch of the accent in front of the name: the label is padded with spaces to make room
+                    const float sw = ImGui::GetTextLineHeight() * 0.75f, gap = ui::Theme::S(10);
+                    int pad = (int)std::ceil((sw + gap) / std::max(ImGui::CalcTextSize(" ").x, 1.0f));
+                    ImVec2 p = ImGui::GetCursorScreenPos();
+                    bool picked = ImGui::MenuItem((std::string(pad, ' ') + themes[i].name).c_str(), nullptr, ui::Theme::accentIndex == i);
+                    float x0 = p.x + ImGui::GetStyle().WindowPadding.x * 0.5f + ui::Theme::S(2);
+                    float y0 = p.y + (ImGui::GetTextLineHeight() - sw) * 0.5f + ImGui::GetStyle().FramePadding.y * 0.0f;
+                    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x0, y0), ImVec2(x0 + sw, y0 + sw), IM_COL32(themes[i].r, themes[i].g, themes[i].b, 255), 2.0f);
+                    if (picked) { m_session.accentTheme = i; ui::Theme::SetAccent(i); }
+                }
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Help"))

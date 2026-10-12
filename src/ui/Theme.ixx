@@ -1,6 +1,7 @@
 module;
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <string>
@@ -23,8 +24,9 @@ export namespace oa::ui
         static constexpr ImU32 Border     = IM_COL32(0x22, 0x22, 0x22, 255);
         static constexpr ImU32 Text       = IM_COL32(0xe2, 0xe2, 0xe2, 255);
         static constexpr ImU32 TextDim    = IM_COL32(0x9a, 0x9a, 0x9a, 255);
-        static constexpr ImU32 Accent     = IM_COL32(0xf2, 0x9b, 0x24, 255);
-        static constexpr ImU32 AccentDim  = IM_COL32(0xb9, 0x75, 0x1a, 255);
+        static inline ImU32 Accent        = IM_COL32(0xf2, 0x9b, 0x24, 255);   // the only colour the theme selector changes
+        static inline ImU32 AccentDim     = IM_COL32(0xb9, 0x75, 0x1a, 255);
+        static inline ImU32 AccentSoft    = IM_COL32(0xf2, 0x9b, 0x24, 70);    // translucent fill for toggled-on buttons
         static constexpr ImU32 ListBg     = IM_COL32(0x6c, 0x6c, 0x6c, 255);
         static constexpr ImU32 ListAlt    = IM_COL32(0x66, 0x66, 0x66, 255);
         static constexpr ImU32 ListText   = IM_COL32(0xf4, 0xf4, 0xf4, 255);
@@ -32,6 +34,22 @@ export namespace oa::ui
     };
 
     inline ImVec4 V4(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
+
+    // Accent themes: named after studios. Everything else in the look stays the same.
+    struct AccentTheme { const char* name; unsigned char r, g, b; };
+    inline const std::array<AccentTheme, 7>& AccentThemes()
+    {
+        static const std::array<AccentTheme, 7> t = { {
+            { "Treyarch",           0xf2, 0x9b, 0x24 },   // orange (default)
+            { "Infinity Ward",      0x6c, 0xc2, 0x4a },   // green
+            { "High Moon",          0xf0, 0xd0, 0x2a },   // yellow
+            { "Sledgehammer",       0x3d, 0x8f, 0xe8 },   // blue
+            { "Raven",              0xe0, 0x4a, 0x4a },   // red
+            { "Beenox",             0xa8, 0x6c, 0xe6 },   // purple
+            { "Vicarious Visions",  0x2c, 0xc4, 0xb8 },   // teal
+        } };
+        return t;
+    }
 
     class Theme
     {
@@ -70,7 +88,26 @@ export namespace oa::ui
             s.IndentSpacing = S(16);
             s.WindowMenuButtonPosition = ImGuiDir_None;
 
-            ImVec4* c = s.Colors;
+            ApplyColors();
+        }
+
+        static inline int accentIndex = 0;
+
+        // Switches the accent colour (index into AccentThemes()) and re-applies the colours of the style.
+        static void SetAccent(int index)
+        {
+            const auto& t = AccentThemes();
+            accentIndex = std::clamp(index, 0, (int)t.size() - 1);
+            const auto& a = t[accentIndex];
+            Palette::Accent = IM_COL32(a.r, a.g, a.b, 255);
+            Palette::AccentDim = IM_COL32(a.r * 3 / 4, a.g * 3 / 4, a.b * 3 / 4, 255);
+            Palette::AccentSoft = IM_COL32(a.r, a.g, a.b, 70);
+            if (ImGui::GetCurrentContext()) ApplyColors();
+        }
+
+        static void ApplyColors()
+        {
+            ImVec4* c = ImGui::GetStyle().Colors;
             c[ImGuiCol_Text]                 = V4(Palette::Text);
             c[ImGuiCol_TextDisabled]         = V4(Palette::TextDim);
             c[ImGuiCol_WindowBg]             = V4(Palette::Window);
@@ -101,7 +138,7 @@ export namespace oa::ui
             c[ImGuiCol_TabHovered]           = V4(IM_COL32(0x4a, 0x4a, 0x4a, 255));
             c[ImGuiCol_TabSelected]          = V4(IM_COL32(0x45, 0x45, 0x45, 255));
             c[ImGuiCol_TabSelectedOverline]  = V4(Palette::Accent);
-            c[ImGuiCol_TextSelectedBg]       = V4(IM_COL32(0xf2, 0x9b, 0x24, 110));
+            c[ImGuiCol_TextSelectedBg]       = V4((Palette::Accent & 0x00FFFFFFu) | (110u << IM_COL32_A_SHIFT));
             c[ImGuiCol_NavCursor]            = V4(Palette::Accent);
             c[ImGuiCol_ModalWindowDimBg]     = V4(IM_COL32(0, 0, 0, 120));
         }
@@ -340,7 +377,7 @@ export namespace oa::ui
         bool hot = ImGui::IsItemHovered(), down = ImGui::IsItemActive();
         ImDrawList* dl = ImGui::GetWindowDrawList();
         if (hot || down || active)
-            dl->AddRectFilled(p, ImVec2(p.x + box, p.y + box), down ? IM_COL32(0, 0, 0, 90) : active ? IM_COL32(242, 155, 36, 70) : IM_COL32(255, 255, 255, 28), Theme::S(2));
+            dl->AddRectFilled(p, ImVec2(p.x + box, p.y + box), down ? IM_COL32(0, 0, 0, 90) : active ? Palette::AccentSoft : IM_COL32(255, 255, 255, 28), Theme::S(2));
         const int firstVtx = dl->VtxBuffer.Size;
         DrawIcon(dl, icon, ImVec2(p.x + Theme::S(4), p.y + Theme::S(4)), size, col);
         if (ImGui::GetStyle().Alpha < 1.0f)   // disabled: the fixed icon colours must fade too

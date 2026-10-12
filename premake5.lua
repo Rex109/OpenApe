@@ -40,7 +40,6 @@ project "openape"
 
     buildoptions { "/utf-8", "/permissive-" }
     staticruntime "On"
-    runtime "Release"
     warnings "Default"
     disablewarnings { "4244", "4267", "4305", "4996" }
     exceptionhandling "On"
@@ -53,11 +52,13 @@ project "openape"
         architecture "x86"
 
     filter "configurations:Debug"
+        runtime "Debug"        -- _DEBUG needs the debug CRT (_CrtDbgReport, _malloc_dbg)
         defines { "_DEBUG" }
         symbols "On"
         optimize "Off"
 
     filter "configurations:Release"
+        runtime "Release"
         defines { "NDEBUG" }
         symbols "On"
         optimize "Speed"
