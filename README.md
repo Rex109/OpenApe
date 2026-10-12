@@ -18,6 +18,8 @@ An open, modern reimplementation of `asset_manager.exe`, the Asset Manager from 
 
 ## ✨ What it does
 
+
+
 - 📝 **Same data model as the original**: reads the `deffiles\*.gdf` definitions (variables, enums and the UI layout) and the `*.gdt` game data, and builds the property editor from them exactly like the 2008 tool
 - 💾 **Safe saving**: GDT files are written back byte-compatibly, and line endings are preserved
 - 🖼️ **3D / 2D preview** on Direct3D 9: materials on a sphere (or a cube, cylinder, cone, torus and plane), models in 3D, images as a flat picture
@@ -49,6 +51,8 @@ The lightbulb opens the lighting menu:
 - 🔦 **Headlight** that follows the camera
 
 ## 🎬 Animations
+
+<img width="1267" height="813" alt="openape_z56M9nSPG6" src="https://github.com/user-attachments/assets/64a9e371-239f-4841-9cb1-55a6ddb9bc7c" />
 
 Selecting an `xanim` asset plays its `xanim_export` file on a skeleton.
 
