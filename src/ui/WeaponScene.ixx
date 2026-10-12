@@ -79,6 +79,14 @@ export namespace oa::ui
                 m_parts.push_back(std::move(p));
             };
             add("handModel", Part::Role::Hands);
+            // Singleplayer weapons leave handModel empty: the level script picks the hands. Show the stock viewhands instead.
+            if (e.GetString("handModel").empty())
+            {
+                auto p = std::make_unique<Part>();
+                p->field = "handModel (default)"; p->model = "viewmodel_base_viewhands"; p->role = Part::Role::Hands;
+                LoadModel(*p, mode);
+                if (p->gpu) m_parts.insert(m_parts.begin(), std::move(p));
+            }
             add("gunModel", Part::Role::Gun);
             for (int i = 2; i <= 16; ++i) add("gunModel" + std::to_string(i), Part::Role::Gun);
             add("worldModel", Part::Role::World);
@@ -324,7 +332,7 @@ export namespace oa::ui
         View CurrentView() const { return m_view; }
 
         // ------------------------------------------------------------------ HUD / kill feed
-        float HudHeight() const { return Theme::S(132); }
+        float HudHeight() const { return Theme::S(150); }
 
         void DrawHud(ImVec2 size)
         {
@@ -368,12 +376,13 @@ export namespace oa::ui
                     dl->AddText(p, c, t);
                 };
                 // call-in message
-                text(ImVec2(a.x + Theme::S(6), y), "UAV Recon called in by NEO for 30 seconds", IM_COL32(210, 210, 200, 255));
+                text(ImVec2(a.x + Theme::S(6), y), "UAV Recon called in by Zed for 30 seconds", IM_COL32(210, 210, 200, 255));
                 y += lh;
                 struct Row { const char* killer; const char* victim; ImU32 kc, vc; bool headshot; };
-                const Row rows[] = { { "NEO", "MemeStike", IM_COL32(150, 235, 140, 255), IM_COL32(255, 255, 255, 255), false },
-                                     { "Pure Supra", "PakArmy", IM_COL32(255, 255, 255, 255), IM_COL32(255, 150, 120, 255), false },
-                                     { "xVx", "dagyugs", IM_COL32(255, 255, 255, 255), IM_COL32(255, 255, 255, 255), true } };
+                const Row rows[] = { { "Zed", "Nightcrawler", IM_COL32(150, 235, 140, 255), IM_COL32(255, 255, 255, 255), false },
+                                     { "Viper", "Ace", IM_COL32(255, 255, 255, 255), IM_COL32(255, 150, 120, 255), false },
+                                     { "Wolfpack", "Blaze", IM_COL32(255, 255, 255, 255), IM_COL32(255, 255, 255, 255), true },
+                                     { "Ghost", "Dragonfly", IM_COL32(255, 255, 255, 255), IM_COL32(255, 150, 120, 255), false } };
                 for (auto& r : rows)
                 {
                     if (y + lh > b.y) break;
