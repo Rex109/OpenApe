@@ -18,8 +18,6 @@ An open, modern reimplementation of `asset_manager.exe`, the Asset Manager from 
 
 ## ✨ What it does
 
-
-
 - 📝 **Same data model as the original**: reads the `deffiles\*.gdf` definitions (variables, enums and the UI layout) and the `*.gdt` game data, and builds the property editor from them exactly like the 2008 tool
 - 💾 **Safe saving**: GDT files are written back byte-compatibly, and line endings are preserved
 - 🖼️ **3D / 2D preview** on Direct3D 9: materials on a sphere (or a cube, cylinder, cone, torus and plane), models in 3D, images as a flat picture
@@ -32,6 +30,8 @@ An open, modern reimplementation of `asset_manager.exe`, the Asset Manager from 
 
 ## 🖼️ Preview
 
+<img width="1920" height="1080" alt="openape_y1Wtsw6lqy_low" src="https://github.com/user-attachments/assets/6d042577-62fd-4f6d-a0cf-e704ca70d470" />
+
 Right click on the preview for more options. Left drag orbits, middle drag pans and the wheel zooms.
 
 - 🔮 **Materials** are drawn on a primitive. Textures are looked up in `raw\images`, in `tex_assets`, and in the stock `.iwd` archives when they are missing
@@ -40,6 +40,8 @@ Right click on the preview for more options. Left drag orbits, middle drag pans 
 - 📂 **File > Preview Compiled Asset** browses every model and material under `raw` without needing a GDT entry
 
 ### 💡 Lighting
+
+<img width="1241" height="775" alt="openape_EC1ndEKPor" src="https://github.com/user-attachments/assets/d201257a-2323-4b3c-869b-5b05f407990b" />
 
 The lightbulb opens the lighting menu:
 
