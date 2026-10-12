@@ -34,11 +34,11 @@ export namespace oa::version
 
     inline bool IsNewer(const std::string& candidate, const std::string& current) { return Parse(candidate) > Parse(current); }
 
-    // "83c50f6  (modified)" for the window title
+    // "83c50f6  (dirty)" for the window title
     inline std::string BuildLabel()
     {
         std::string s = kCommit;
-        if (kDirty) s += "  (modified)";
+        if (kDirty) s += "  (dirty)";
         return s;
     }
 

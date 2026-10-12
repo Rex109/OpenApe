@@ -416,7 +416,7 @@ export namespace oa
             case Modal::Quit:
                 ImGui::TextUnformatted("Some GDT files have unsaved changes.");
                 ImGui::Spacing();
-                if (ImGui::Button("Save all && quit", ImVec2(w * 1.5f, 0)))
+                if (ImGui::Button("Save and quit", ImVec2(w * 1.5f, 0)))
                 {
                     auto errs = m_session.project.SaveAll();
                     if (errs.empty()) m_quit = true;
