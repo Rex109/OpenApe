@@ -24,6 +24,8 @@ import openape.gdf;
 import openape.gdt;
 import openape.project;
 import openape.session;
+import openape.version;
+import openape.update;
 import openape.platform;
 import openape.renderer;
 import openape.ui.theme;
@@ -100,6 +102,7 @@ export namespace oa
                 for (auto& g : m_session.project.Gdts())
                     if (auto* e = g->Find(m_shotSelect)) { m_session.Open(e); break; }
 
+            if (m_session.checkUpdates && m_shotPath.empty()) m_update.Start();   // not during scripted screenshot runs
             ShowWindow(m_hwnd, SW_SHOWMAXIMIZED);
             UpdateWindow(m_hwnd);
 
@@ -166,8 +169,20 @@ export namespace oa
             if (ImGui::GetCurrentContext() && ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) return true;
             switch (msg)
             {
+            case WM_ENTERSIZEMOVE:
+                if (app) app->m_inSizeMove = true;
+                return 0;
+            case WM_EXITSIZEMOVE:
+                if (app) app->m_inSizeMove = false;
+                return 0;
             case WM_SIZE:
-                if (app && wp != SIZE_MINIMIZED) { app->m_width = LOWORD(lp); app->m_height = HIWORD(lp); app->m_renderer.RequestReset(); }
+                if (app && wp != SIZE_MINIMIZED)
+                {
+                    app->m_width = LOWORD(lp); app->m_height = HIWORD(lp); app->m_renderer.RequestReset();
+                    // Windows runs its own message loop while the window is being dragged larger or smaller, so the main loop
+                    // does not get to draw: render from here to follow the resize live
+                    if (app->m_inSizeMove) app->Frame();
+                }
                 return 0;
             case WM_SYSCOMMAND:
                 if ((wp & 0xfff0) == SC_KEYMENU) return 0;
@@ -426,6 +441,13 @@ export namespace oa
                 ImGui::TextUnformatted("OpenApe - an open reimplementation of the Call of Duty 4 Asset Manager.");
                 ImGui::TextDisabled("Dear ImGui + Direct3D 9. Reads deffiles/*.gdf and *.gdt like the original tool.");
                 ImGui::Spacing();
+                ImGui::Text("Version %s", version::Describe().c_str());
+                {
+                    auto upd = m_update.Get();
+                    if (upd.state == UpdateChecker::State::Available) ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.45f, 1), "Version %s is available", upd.latest.c_str());
+                    else if (upd.state == UpdateChecker::State::UpToDate) ImGui::TextDisabled("Up to date (latest release: %s)", upd.latest.c_str());
+                }
+                ImGui::Spacing();
                 if (ImGui::Button("OK", ImVec2(w, 0))) { ImGui::CloseCurrentPopup(); m_modal = Modal::None; }
                 break;
             default: break;
@@ -495,6 +517,8 @@ export namespace oa
         // ------------------------------------------------------------------ frame
         void Frame()
         {
+            if (m_inFrame) return;   // a modal dialog or the resize loop pumped messages while a frame was being built
+            struct Guard { bool& f; Guard(bool& x) : f(x) { f = true; } ~Guard() { f = false; } } guard(m_inFrame);
             auto lost = [this] { ImGui_ImplDX9_InvalidateDeviceObjects(); m_preview->OnDeviceLost(); };
             auto reset = [this] { ImGui_ImplDX9_CreateDeviceObjects(); m_preview->OnDeviceReset(); };
             if (!m_renderer.EnsureDevice(m_width, m_height, lost, reset)) return;
@@ -561,9 +585,27 @@ export namespace oa
 
         void UpdateTitle()
         {
-            std::string t = "Asset Property Editor (OpenApe)";
-            if (m_session.project.IsOpen()) t += " - " + m_session.project.Root().string();
+            std::string t = std::string("OpenApe ") + version::kVersion + "  |  Asset Property Editor  |  " + version::BuildLabel();
+            auto upd = m_update.Get();
+            if (upd.state == UpdateChecker::State::Available) t += "  |  update available: " + upd.latest;
+            if (m_session.project.IsOpen()) t += "  |  " + m_session.project.Root().string();
             if (m_session.project.AnyDirty()) t += " *";
+            if (upd.state != m_lastUpdateState)
+            {
+                m_lastUpdateState = upd.state;
+                if (upd.state == UpdateChecker::State::Available && !m_updateAnnounced)
+                {
+                    m_updateAnnounced = true;
+                    m_session.Notify("Version " + upd.latest + " is available (you have " + version::kVersion + ") - see Help > Check for updates", 10);
+                }
+                else if (m_updateManual && (upd.state == UpdateChecker::State::UpToDate || upd.state == UpdateChecker::State::NoRelease || upd.state == UpdateChecker::State::Failed))
+                {
+                    m_updateManual = false;
+                    m_session.Notify(upd.state == UpdateChecker::State::UpToDate ? "OpenApe " + std::string(version::kVersion) + " is up to date"
+                                   : upd.state == UpdateChecker::State::NoRelease ? "No release has been published yet"
+                                   : "Update check failed: " + upd.error);
+                }
+            }
             if (t != m_title) { m_title = t; SetWindowTextA(m_hwnd, t.c_str()); }
         }
 
@@ -661,6 +703,14 @@ export namespace oa
             }
             if (ImGui::BeginMenu("Help"))
             {
+                auto upd = m_update.Get();
+                if (upd.state == UpdateChecker::State::Available && UpdateChecker::SafeUrl(upd.url) &&
+                    ImGui::MenuItem(("Download version " + upd.latest + "...").c_str()))
+                    platform::OpenInShell(upd.url);
+                if (ImGui::MenuItem(upd.state == UpdateChecker::State::Checking ? "Checking for updates..." : "Check for updates", nullptr, false, upd.state != UpdateChecker::State::Checking))
+                { m_updateManual = true; m_updateAnnounced = false; m_lastUpdateState = UpdateChecker::State::Idle; m_update.Start(); }
+                ImGui::MenuItem("Check for updates at startup", nullptr, &m_session.checkUpdates);
+                ImGui::Separator();
                 if (ImGui::MenuItem("About")) { m_modal = Modal::About; m_modalOpen = true; }
                 ImGui::EndMenu();
             }
@@ -930,6 +980,10 @@ export namespace oa
         int m_width = 1500, m_height = 900;
         bool m_quit = false;
         std::string m_title;
+        bool m_inSizeMove = false, m_inFrame = false;
+        UpdateChecker m_update;
+        UpdateChecker::State m_lastUpdateState = UpdateChecker::State::Idle;
+        bool m_updateAnnounced = false, m_updateManual = false;
 
         Renderer m_renderer;
         Session m_session;
