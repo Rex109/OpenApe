@@ -224,6 +224,31 @@ export namespace oa::ui
             return false;
         }
 
+        // Bounding sphere of what is drawn right now (animations move parts far from the bind pose).
+        void PosedSphere(Vec3& center, float& radius) const
+        {
+            Vec3 mn{ 1e30f, 1e30f, 1e30f }, mx{ -1e30f, -1e30f, -1e30f };
+            bool any = false;
+            for (auto& p : m_parts)
+            {
+                if (!p->gpu || !p->visible) continue;
+                if ((p->role == Part::Role::World) != (m_view == View::WorldModel)) continue;
+                const auto& m = p->attach.m;
+                for (auto& v : p->posed.vertices)
+                {
+                    Vec3 w{ v.x * m[0][0] + v.y * m[1][0] + v.z * m[2][0] + m[3][0],
+                            v.x * m[0][1] + v.y * m[1][1] + v.z * m[2][1] + m[3][1],
+                            v.x * m[0][2] + v.y * m[1][2] + v.z * m[2][2] + m[3][2] };
+                    mn = { std::min(mn.x, w.x), std::min(mn.y, w.y), std::min(mn.z, w.z) };
+                    mx = { std::max(mx.x, w.x), std::max(mx.y, w.y), std::max(mx.z, w.z) };
+                    any = true;
+                }
+            }
+            if (!any) { center = m_center; radius = m_radius; return; }
+            center = (mn + mx) * 0.5f;
+            radius = std::max((mx - mn).Length() * 0.5f, 0.01f);
+        }
+
         Vec3 Center() const { return m_center; }
         float Radius() const { return m_radius; }
 

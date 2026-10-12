@@ -149,8 +149,14 @@ export namespace oa
         void ClipPlanes(float& zn, float& zf) const
         {
             if (subjectRadius <= 0) { zn = std::max(distance * 0.01f, 0.01f); zf = distance * 20.0f + 100.0f; return; }
-            float d = (Eye() - subjectCenter).Length();
-            zn = std::max(d - subjectRadius * 1.05f, subjectRadius * 0.01f);
+            // the near plane follows the depth along the view axis (not the distance to the eye): with the subject far off
+            // to one side the two differ a lot, and a distance-based near plane would cut the subject away
+            Vec3 eye = Eye();
+            Vec3 fwd = firstPerson ? fpDir : (target - eye);
+            fwd = fwd.Length() > 1e-6f ? fwd.Normalized() : Vec3{ 1, 0, 0 };
+            float d = (eye - subjectCenter).Length();
+            float depth = (subjectCenter - eye).Dot(fwd);
+            zn = std::max(depth - subjectRadius * 1.05f, subjectRadius * 0.01f);
             zf = std::max(d + subjectRadius * 1.05f, zn * 2.0f);
         }
         Mat4 Proj(float aspect) const

@@ -257,8 +257,23 @@ export namespace oa::ui
                 for (size_t i = 0; i < m_model->submeshes.size(); ++i)
                     calls.push_back({ m_model.get(), i, i < m_subStyles.size() ? m_subStyles[i] : SurfaceStyle{} });
             }
-            if (m_kind == Kind::Model && m_model && !m_modelData.Empty()) { m_cam.subjectCenter = m_modelData.Center(); m_cam.subjectRadius = m_modelData.Radius(); }
-            else if (m_kind == Kind::Weapon) { m_cam.subjectCenter = m_weapon->Center(); m_cam.subjectRadius = m_weapon->Radius() * 1.5f; }
+            if (m_kind == Kind::Model && m_model && !m_modelData.Empty())
+            {
+                m_cam.subjectCenter = m_modelData.Center(); m_cam.subjectRadius = m_modelData.Radius();
+                // an animation can carry the model far from its bind pose: bound the pose actually shown
+                if (m_isAnim && !m_modelData.skin.empty() && !m_posedMesh.vertices.empty())
+                {
+                    Vec3 mn{ 1e30f, 1e30f, 1e30f }, mx{ -1e30f, -1e30f, -1e30f };
+                    for (auto& v : m_posedMesh.vertices)
+                    {
+                        mn = { std::min(mn.x, v.x), std::min(mn.y, v.y), std::min(mn.z, v.z) };
+                        mx = { std::max(mx.x, v.x), std::max(mx.y, v.y), std::max(mx.z, v.z) };
+                    }
+                    m_cam.subjectCenter = (mn + mx) * 0.5f;
+                    m_cam.subjectRadius = std::max((mx - mn).Length() * 0.5f, 0.01f);
+                }
+            }
+            else if (m_kind == Kind::Weapon) { m_weapon->PosedSphere(m_cam.subjectCenter, m_cam.subjectRadius); m_cam.subjectRadius *= 1.1f; }
             else { m_cam.subjectCenter = { 0, 0, 0 }; m_cam.subjectRadius = ShapeRadius(); }
             OverlayGeometry bones3d;
             if ((m_kind == Kind::Model || m_kind == Kind::Weapon) && m_showBones && m_boneShapes) BuildBoneShapes(bones3d);
