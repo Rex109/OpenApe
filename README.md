@@ -64,12 +64,16 @@ Selecting an `xanim` asset plays its `xanim_export` file on a skeleton.
 
 ## 🦴 Bones
 
+<img width="1004" height="574" alt="openape_LUihMywWHL" src="https://github.com/user-attachments/assets/f6086fa1-4126-435a-a23e-2609ccaa8497" />
+
 Any model with bones gets two toolbar buttons:
 
 - 🔶 **Show bones**, as shaded 3D bone shapes coloured by hierarchy depth (or plain lines, from the right click menu)
 - 🏷️ **Show bone names**, which works with or without the bone shapes
 
 ## 📁 Assets, filters and tabs
+
+<img width="1005" height="668" alt="openape_qXK2nVZvp8" src="https://github.com/user-attachments/assets/ff14288f-74a5-4eff-85d1-3cf0cb6c3abe" />
 
 - 🔎 Filter assets by name, type, GDT file or value, and save filter sets
 - ⭐ Favourites, and sorting by file order, name or type
