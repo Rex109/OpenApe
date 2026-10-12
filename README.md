@@ -3,7 +3,8 @@
 [![ManyAsset](https://img.shields.io/discord/585171589750849538?color=%23FF8711&label=ManyAsset&logo=discord&logoColor=%23FFFFFF)](https://discord.gg/v2TWkeR)
 
 # OpenApe
-<img width="1820" height="396" alt="logo2" src="https://github.com/user-attachments/assets/310d56b2-4c89-4439-8404-e25d94e14ddf" />
+<img width="1820" height="396" alt="logo" src="https://github.com/user-attachments/assets/f46cd4df-18ad-4c3f-b792-6057038322ca" />
+
 
 *<p align="center"><sub>The classic toolkit, evolved.</sub></p>*
 <br>
