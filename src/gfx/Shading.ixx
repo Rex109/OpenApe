@@ -144,6 +144,19 @@ export namespace oa
                 r.notes.push_back("techset '" + techset + "' not found, using " + GuessTechset(gdt));
                 techset = GuessTechset(gdt);
             }
+            // A material whose in-game lit and unlit techniques are one and the same shader (a custom effect that ignores the
+            // lights) looks like that in the game; the editor's own "sunlight preview" technique would show a stock lit shader.
+            if (mode == ShadeMode::Sun)
+            {
+                const game::Technique* unlit = m_game.FindTechnique(techset, "unlit");
+                const game::Technique* litSun = m_game.FindTechnique(techset, "lit sun");
+                if (unlit && litSun && unlit->file == litSun->file)
+                {
+                    wanted = { "unlit", "fakelight normal" };
+                    techName = wanted.front();
+                    r.notes.push_back("this material does not react to lighting in the game (lit and unlit are the same shader), showing it unlit");
+                }
+            }
             for (const char* w : wanted)
                 if ((tech = m_game.FindTechnique(techset, w)) != nullptr) { techName = w; break; }
             if (!tech)
