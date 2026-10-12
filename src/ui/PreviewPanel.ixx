@@ -162,6 +162,19 @@ export namespace oa::ui
                     ImGui::EndDisabled();
                 }
             }
+            if (m_kind == Kind::Model && m_lodLabels.size() > 1 && m_session.previewImage.empty())
+            {
+                ImGui::SameLine(0, Theme::S(8));
+                ImGui::SetNextItemWidth(Theme::S(150));
+                int cur = std::clamp(m_lod, 0, (int)m_lodLabels.size() - 1);
+                if (ImGui::BeginCombo("##lod", m_lodLabels[cur].c_str()))
+                {
+                    for (int i = 0; i < (int)m_lodLabels.size(); ++i)
+                        if (ImGui::Selectable(m_lodLabels[i].c_str(), i == cur)) { m_lod = i; m_signature.clear(); }
+                    ImGui::EndCombo();
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Level of detail shown");
+            }
             if (!(m_isAnim && (m_kind == Kind::Model || m_kind == Kind::Weapon)))
             {
                 ImGui::SameLine(0, Theme::S(14));
@@ -235,6 +248,7 @@ export namespace oa::ui
             Mat4 world;
             if (m_kind == Kind::Material)
             {
+                AnimateShapeUv();
                 if (auto* mesh = ShapeMesh()) calls.push_back({ mesh, 0, m_style });
             }
             else if (m_kind == Kind::Weapon) m_weapon->Collect(calls);
@@ -452,8 +466,41 @@ export namespace oa::ui
                 case Shape::Plane: md = MeshData::Plane(); break;
                 }
                 slot = m_renderer.CreateMesh(md);
+                m_shapeBase[(int)m_shape] = std::move(md);
             }
             return slot.get();
+        }
+
+        // texScroll and texture atlases: the shape's texture coordinates are animated on the CPU.
+        void AnimateShapeUv()
+        {
+            const int idx = (int)m_shape;
+            ShapeMesh();
+            GpuMesh* mesh = m_shapes[idx].get();
+            if (!mesh) return;
+            const int cells = m_style.atlasRows * m_style.atlasCols;
+            if (!m_style.scroll && cells <= 1)
+            {
+                if (m_shapeUvDirty[idx]) { m_renderer.UpdateMesh(*mesh, m_shapeBase[idx]); m_shapeUvDirty[idx] = false; }
+                return;
+            }
+            const double t = ImGui::GetTime();
+            MeshData md = m_shapeBase[idx];
+            const int frame = (int)(t * 8.0) % std::max(cells, 1);
+            for (auto& v : md.vertices)
+            {
+                float u = v.u, w = v.v;
+                if (m_style.scroll) u += (float)std::fmod(t * 0.2, 1.0);
+                if (cells > 1)
+                {
+                    u -= std::floor(u); w -= std::floor(w);
+                    u = (u + (float)(frame % m_style.atlasCols)) / (float)m_style.atlasCols;
+                    w = (w + (float)(frame / m_style.atlasCols)) / (float)m_style.atlasRows;
+                }
+                v.u = u; v.v = w;
+            }
+            m_renderer.UpdateMesh(*mesh, md);
+            m_shapeUvDirty[idx] = true;
         }
 
         std::string Signature(const gdt::Entry& e) const
@@ -468,6 +515,7 @@ export namespace oa::ui
             s += "|" + std::to_string(m_session.project.Revision());   // bumped by reloads, renames and deletes
             if (false) {}
             else if (IEquals(e.GdfName(), "xanim.gdf")) s += "|" + m_skelOverride;
+            else if (IEquals(e.GdfName(), "xmodel.gdf")) s += "|lod" + std::to_string(m_lod);
             return s;
         }
 
@@ -476,13 +524,17 @@ export namespace oa::ui
             const gdt::Entry* e = m_session.Selected();
             bool rawModel = !m_session.previewRawModel.empty(), rawMat = !m_session.previewRawMaterial.empty();
             bool rawAnim = !m_session.previewRawAnim.empty();
+            {
+                std::string key = rawModel ? "raw:" + m_session.previewRawModel : e ? std::to_string((uintptr_t)e) : std::string();
+                if (key != m_lodKey) { m_lodKey = key; m_lod = 0; }
+            }
             if (!e && !rawModel && !rawMat && !rawAnim)
             {
                 m_kind = Kind::None; m_message.clear(); m_signature.clear();
                 return;
             }
             std::string sig = rawAnim ? "rawa|" + m_session.previewRawAnim + "|" + m_skelOverride + "|" + std::to_string((int)EffectiveMode())
-                            : rawModel ? "rawm|" + m_session.previewRawModel + "|" + std::to_string((int)EffectiveMode())
+                            : rawModel ? "rawm|" + m_session.previewRawModel + "|" + std::to_string((int)EffectiveMode()) + "|" + std::to_string(m_lod)
                             : rawMat ? "rawt|" + m_session.previewRawMaterial + "|" + std::to_string((int)EffectiveMode())
                             : Signature(*e);
             if (sig == m_signature) return;
@@ -941,7 +993,15 @@ export namespace oa::ui
         void BuildModel(const gdt::Entry& e)
         {
             // Prefer the editable XMODEL_EXPORT source; fall back to the compiled model under raw/.
-            std::string rel = e.GetString("filename");
+            // The asset names up to four LOD sources (filename, mediumLod, lowLod, lowestLod).
+            static const char* lodFields[] = { "filename", "mediumLod", "lowLod", "lowestLod" };
+            static const char* lodDists[] = { "highLodDist", "mediumLodDist", "lowLodDist", "lowestLodDist" };
+            static const char* lodNames[] = { "High", "Medium", "Low", "Lowest" };
+            std::vector<int> avail;
+            for (int i = 0; i < 4; ++i) if (!e.GetString(lodFields[i]).empty()) avail.push_back(i);
+            m_lodLabels.clear();
+            if (!avail.empty()) m_lod = std::clamp(m_lod, 0, (int)avail.size() - 1);
+            std::string rel = avail.empty() ? e.GetString("filename") : e.GetString(lodFields[avail[m_lod]]);
             std::string err, source;
             bool loaded = false;
             if (!rel.empty())
@@ -951,6 +1011,14 @@ export namespace oa::ui
                 {
                     loaded = XModelExportLoader::Load(path, m_modelData, err);
                     if (loaded) source = path.filename().string();
+                    if (loaded)
+                        for (int i : avail)
+                        {
+                            std::string l = std::string(lodNames[i]) + " LOD";
+                            double d = e.GetNumber(lodDists[i]);
+                            if (d > 0) { char b[48]; std::snprintf(b, sizeof(b), "  (from %g)", d); l += b; }
+                            m_lodLabels.push_back(l);
+                        }
                 }
                 else err = "source not found: " + rel;
             }
@@ -958,7 +1026,8 @@ export namespace oa::ui
             {
                 std::string cerr;
                 fs::path raw = m_session.project.Root() / "raw";
-                loaded = CompiledXModel::Load(raw, e.Name(), 0, m_modelData, cerr);
+                SetCompiledLods(raw, e.Name());
+                loaded = CompiledXModel::Load(raw, e.Name(), m_lod, m_modelData, cerr);
                 if (loaded) source = "compiled raw/xmodel/" + e.Name();
                 else err += (err.empty() ? "" : "\n") + cerr;
             }
@@ -970,11 +1039,26 @@ export namespace oa::ui
         void BuildRawModel(const std::string& name)
         {
             std::string err;
-            if (!CompiledXModel::Load(m_session.project.Root() / "raw", name, 0, m_modelData, err))
+            SetCompiledLods(m_session.project.Root() / "raw", name);
+            if (!CompiledXModel::Load(m_session.project.Root() / "raw", name, m_lod, m_modelData, err))
             {
                 m_kind = Kind::None; m_message = "Cannot show compiled model '" + name + "'\n" + err; return;
             }
             FinishModel("compiled raw/xmodel/" + name);
+        }
+
+        // LOD choices of a compiled model; also clamps the selected one.
+        void SetCompiledLods(const fs::path& raw, const std::string& name)
+        {
+            auto lods = CompiledXModel::Lods(raw, name);
+            m_lodLabels.clear();
+            for (size_t i = 0; i < lods.size(); ++i)
+            {
+                char b[64];
+                std::snprintf(b, sizeof(b), "LOD %zu  (from %g)", i, lods[i].distance);
+                m_lodLabels.push_back(b);
+            }
+            if (!lods.empty()) m_lod = std::clamp(m_lod, 0, (int)lods.size() - 1);
         }
 
         void FinishModel(const std::string& source)
@@ -1027,6 +1111,11 @@ export namespace oa::ui
         std::vector<std::string> m_skyNames;
         std::map<std::string, std::shared_ptr<GpuCube>> m_skyCache;
         int m_pendingFrame = -1;
+        int m_lod = 0;
+        std::string m_lodKey;
+        std::vector<std::string> m_lodLabels;
+        MeshData m_shapeBase[6];
+        bool m_shapeUvDirty[6] = {};
         std::string m_pendingWeaponAnim;
         bool m_fpv = false;
         float m_fpvFovDeg = 90.0f, m_orbitFovDeg = 40.0f;

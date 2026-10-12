@@ -66,6 +66,8 @@ export namespace oa
         bool tileU = true, tileV = true;
         bool blend = false, additive = false;
         bool doubleSided = false;
+        bool cullFront = false;     // cullFace "Front": the faces turned towards the viewer are the ones dropped
+        unsigned CullMode() const { return doubleSided ? 1u : cullFront ? 2u : 3u; }   // D3DCULL_NONE / CW / CCW
         bool alphaTest = false;   // cut-out material: texels with alpha < 128 are discarded
         // texture filtering of the colour map (the material's filterColor)
         enum class Filter { Default, NoMipNearest, NoMipLinear, Standard, Bilinear4x, Trilinear2x, Trilinear4x } filter = Filter::Default;
@@ -76,6 +78,14 @@ export namespace oa
         int polyOffset = 0;         // 0 none, 1 static decal, 2 weapon impact
         unsigned colorMask = 0xF;
         bool noDepthTest = false;
+        // blendFunc "Custom": D3DBLENDOP / D3DBLEND values; an op of 0 means "Disable"
+        bool customBlend = false;
+        int opRgb = 1, opAlpha = 1, srcRgb = 2, dstRgb = 1, srcAlpha = 2, dstAlpha = 1;
+        // specColorStrength / cosinePowerStrength (0..1): scale the highlight of the built-in lighting
+        float specStrength = 1.0f, powerStrength = 1.0f;
+        // texScroll and texture atlases: animated by the preview on the shape meshes
+        bool scroll = false;
+        int atlasRows = 1, atlasCols = 1;
         std::shared_ptr<ShaderMaterial> shader;   // when set, drawn with the game's own shaders
     };
 
@@ -88,7 +98,7 @@ export namespace oa
         std::vector<game::ShaderConstant> vsConsts, psConsts;
         struct Literal { std::string name; std::array<float, 4> value; };
         std::vector<Literal> literals;                       // material constants and technique literals
-        struct Tex { int sampler; std::shared_ptr<GpuTexture> tex; bool clampU, clampV; bool isColor = false; };
+        struct Tex { int sampler; std::shared_ptr<GpuTexture> tex; bool clampU, clampV; bool isColor = false; SurfaceStyle::Filter filter = SurfaceStyle::Filter::Default; };
         std::vector<Tex> textures;
         std::string label;                                   // "vs_2_0 sunpre_s_tc0n0.hlsl + ps_2_0 ..."
     };
@@ -747,14 +757,15 @@ export namespace oa
             const float k = (s.color && s.color->tex) ? 1.0f : 0.72f;   // untextured surfaces: soft grey so shading stays visible
             mtl.Diffuse = { s.tint[0] * k, s.tint[1] * k, s.tint[2] * k, s.tint[3] };
             mtl.Ambient = mtl.Diffuse;
-            mtl.Specular = { s.specular, s.specular, s.specular, 1 };
-            mtl.Power = s.shininess;
+            const float sp = s.specular * s.specStrength;
+            mtl.Specular = { sp, sp, sp, 1 };
+            mtl.Power = std::max(s.shininess * (0.1f + 0.9f * s.powerStrength), 1.0f);
             m_dev->SetMaterial(&mtl);
 
             m_dev->SetStreamSource(0, dc.mesh->vb.Get(), 0, sizeof(Vertex));
             m_dev->SetIndices(dc.mesh->ib.Get());
 
-            m_dev->SetRenderState(D3DRS_CULLMODE, s.doubleSided ? D3DCULL_NONE : D3DCULL_CCW);
+            m_dev->SetRenderState(D3DRS_CULLMODE, s.CullMode());
             m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, (s.blend || s.additive) ? TRUE : FALSE);
             m_dev->SetRenderState(D3DRS_SRCBLEND, s.additive ? D3DBLEND_SRCALPHA : D3DBLEND_SRCALPHA);
             m_dev->SetRenderState(D3DRS_DESTBLEND, s.additive ? D3DBLEND_ONE : D3DBLEND_INVSRCALPHA);
@@ -891,7 +902,20 @@ export namespace oa
         // The material's own raster state, applied on top of the blend setup of the draw path (only for visible passes).
         void ApplyMaterialRaster(const SurfaceStyle& s)
         {
-            if (s.multiply) { m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE); m_dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_DESTCOLOR); m_dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ZERO); }
+            if (s.customBlend)
+            {
+                bool on = s.opRgb != 0 || s.opAlpha != 0;
+                m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, on ? TRUE : FALSE);
+                m_dev->SetRenderState(D3DRS_BLENDOP, s.opRgb ? s.opRgb : D3DBLENDOP_ADD);
+                m_dev->SetRenderState(D3DRS_SRCBLEND, s.srcRgb);
+                m_dev->SetRenderState(D3DRS_DESTBLEND, s.dstRgb);
+                m_dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, TRUE);
+                m_dev->SetRenderState(D3DRS_BLENDOPALPHA, s.opAlpha ? s.opAlpha : D3DBLENDOP_ADD);
+                m_dev->SetRenderState(D3DRS_SRCBLENDALPHA, s.srcAlpha);
+                m_dev->SetRenderState(D3DRS_DESTBLENDALPHA, s.dstAlpha);
+                m_dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+            }
+            else if (s.multiply) { m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE); m_dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_DESTCOLOR); m_dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ZERO); }
             else if (s.screen) { m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE); m_dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE); m_dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCCOLOR); }
             m_dev->SetRenderState(D3DRS_ZFUNC, s.noDepthTest ? D3DCMP_ALWAYS : s.depthFunc);
             if (s.depthWrite >= 0) m_dev->SetRenderState(D3DRS_ZWRITEENABLE, s.depthWrite ? TRUE : FALSE);
@@ -905,6 +929,9 @@ export namespace oa
         }
         void ResetMaterialRaster()
         {
+            m_dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+            m_dev->SetRenderState(D3DRS_BLENDOPALPHA, D3DBLENDOP_ADD);
+            m_dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
             m_dev->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
             m_dev->SetRenderState(D3DRS_DEPTHBIAS, 0);
             m_dev->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, 0);
@@ -953,7 +980,7 @@ export namespace oa
             m_dev->SetStreamSource(0, dc.mesh->vb.Get(), 0, sizeof(Vertex));
             m_dev->SetStreamSource(1, dc.mesh->vbPacked.Get(), 0, 12);
             m_dev->SetIndices(dc.mesh->ib.Get());
-            m_dev->SetRenderState(D3DRS_CULLMODE, s.doubleSided ? D3DCULL_NONE : D3DCULL_CCW);
+            m_dev->SetRenderState(D3DRS_CULLMODE, s.CullMode());
             m_dev->SetRenderState(D3DRS_LIGHTING, FALSE);
             m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
             m_dev->SetRenderState(D3DRS_ZENABLE, mode == AmbientMode::ClearStencil ? FALSE : TRUE);
@@ -1015,7 +1042,7 @@ export namespace oa
             m_dev->SetStreamSource(0, dc.mesh->vb.Get(), 0, sizeof(Vertex));
             m_dev->SetStreamSource(1, dc.mesh->vbPacked.Get(), 0, 12);
             m_dev->SetIndices(dc.mesh->ib.Get());
-            m_dev->SetRenderState(D3DRS_CULLMODE, s.doubleSided ? D3DCULL_NONE : D3DCULL_CCW);
+            m_dev->SetRenderState(D3DRS_CULLMODE, s.CullMode());
             m_dev->SetRenderState(D3DRS_LIGHTING, FALSE);
             m_dev->SetRenderState(D3DRS_COLORWRITEENABLE, phase == ShadePhase::DepthOnly ? 0 : 0xF);
             // cut-out materials (hair, fabric edges, foliage): the game alpha-tests them, so transparent texels must neither
@@ -1066,7 +1093,7 @@ export namespace oa
                     m_dev->SetTexture(t.sampler, t.tex ? t.tex->tex.Get() : nullptr);
                     m_dev->SetSamplerState(t.sampler, D3DSAMP_ADDRESSU, t.clampU ? D3DTADDRESS_CLAMP : D3DTADDRESS_WRAP);
                     m_dev->SetSamplerState(t.sampler, D3DSAMP_ADDRESSV, t.clampV ? D3DTADDRESS_CLAMP : D3DTADDRESS_WRAP);
-                    SetFilter(t.sampler, t.isColor ? s.filter : SurfaceStyle::Filter::Default);
+                    SetFilter(t.sampler, t.isColor ? s.filter : t.filter);
                 }
                 m_dev->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, dc.mesh->vertexCount, sm.firstIndex, sm.indexCount / 3);
                 for (auto& t : pass.textures) m_dev->SetTexture(t.sampler, nullptr);

@@ -1,6 +1,8 @@
 module;
 
+#include <algorithm>
 #include <array>
+#include <cstring>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -51,9 +53,53 @@ export namespace oa
 
         void ClearCache() { m_special.clear(); }
 
+        // "mip standard (2x bilinear)*" | "<auto filter>*" | "bilinear" | "trilinear" | "anisotropic",
+        // "mip expensive (4x bilinear)", "mip more expensive (2x trilinear)", "mip most expensive (4x trilinear)",
+        // "nomip nearest" | "nearest", "nomip bilinear" | "linear"   (a file may use any of the aliases)
+        static SurfaceStyle::Filter ParseFilter(std::string f)
+        {
+            using F = SurfaceStyle::Filter;
+            f = ToLower(f);
+            if (!f.empty() && f.back() == '*') f.pop_back();
+            if (f.rfind("nomip nearest", 0) == 0 || f == "nearest") return F::NoMipNearest;
+            if (f.rfind("nomip bilinear", 0) == 0 || f == "linear") return F::NoMipLinear;
+            if (f.find("most expensive") != std::string::npos) return F::Trilinear4x;
+            if (f.find("more expensive") != std::string::npos || f == "trilinear") return F::Trilinear2x;
+            if (f.find("expensive") != std::string::npos) return F::Bilinear4x;
+            if (f.rfind("mip standard", 0) == 0 || f == "bilinear" || f == "<auto filter>") return F::Standard;
+            if (f == "anisotropic") return F::Trilinear4x;
+            return F::Default;
+        }
+
+        // "tile both*" | "tile horizontal" | "tile vertical" | "no tile"
+        static void ParseTile(const std::string& t, bool& u, bool& v)
+        {
+            u = t.find("no tile") == std::string::npos && t.find("vertical") == std::string::npos;
+            v = t.find("no tile") == std::string::npos && t.find("horizontal") == std::string::npos;
+        }
+
+        // blendFunc "Custom" factor / op names
+        static int ParseBlendFactor(const std::string& n)
+        {
+            static const char* names[] = { "One", "Zero", "SrcColor", "InvSrcColor", "SrcAlpha", "InvSrcAlpha", "DestAlpha", "InvDestAlpha", "DestColor", "InvDestColor" };
+            static const int d3d[] = { 2, 1, 3, 4, 5, 6, 7, 8, 9, 10 };
+            for (int i = 0; i < 10; ++i) if (n.rfind(names[i], 0) == 0 && (n.size() == strlen(names[i]) || n[strlen(names[i])] == '*')) return d3d[i];
+            return 2;
+        }
+        static int ParseBlendOp(const std::string& n)   // D3DBLENDOP, 0 = Disable
+        {
+            if (n.rfind("Subtract", 0) == 0) return 2;
+            if (n.rfind("RevSubtract", 0) == 0) return 3;
+            if (n.rfind("Min", 0) == 0) return 4;
+            if (n.rfind("Max", 0) == 0) return 5;
+            if (n.rfind("Disable", 0) == 0) return 0;
+            return 1;
+        }
+
         Result Build(const std::string& materialName, const gdt::Entry* gdt, ShadeMode mode)
         {
             Result r;
+            m_mapState.clear();
             const game::CompiledMaterial* cm = materialName.empty() ? nullptr : m_game.FindMaterial(materialName);
 
             // textures by semantic: GDT paths win, compiled materials fill the gaps
@@ -157,14 +203,41 @@ export namespace oa
         void FromGdt(const gdt::Entry& e, Result& r, std::map<std::string, std::shared_ptr<GpuTexture>>& maps, std::map<std::string, std::array<float, 4>>& consts, std::map<std::string, std::string>& missing)
         {
             r.style.specular = e.GetString("materialType").find("phong") != std::string::npos ? 0.45f : 0.08f;
-            std::string tile = e.GetString("tileColor");
-            r.style.tileU = tile.find("no tile") == std::string::npos && tile.find("vertical") == std::string::npos;
-            r.style.tileV = tile.find("no tile") == std::string::npos && tile.find("horizontal") == std::string::npos;
+            ParseTile(e.GetString("tileColor"), r.style.tileU, r.style.tileV);
+            r.style.filter = ParseFilter(e.GetString("filterColor"));
+            // per-map tiling and filtering (only the shader path samples those maps)
+            {
+                MapState ms;
+                ParseTile(e.GetString("tileColor"), ms.tileU, ms.tileV); ms.filter = r.style.filter; m_mapState["colorMap"] = ms;
+                ParseTile(e.GetString("tileNormal"), ms.tileU, ms.tileV); ms.filter = ParseFilter(e.GetString("filterNormal")); m_mapState["normalMap"] = ms;
+                ParseTile(e.GetString("tileSpecular"), ms.tileU, ms.tileV); ms.filter = ParseFilter(e.GetString("filterSpecular")); m_mapState["specularMap"] = ms;
+                ms.tileU = ms.tileV = true; ms.filter = ParseFilter(e.GetString("filterDetail")); m_mapState["detailMap"] = ms;
+            }
+            {
+                double ss = e.GetNumber("specColorStrength"), cs = e.GetNumber("cosinePowerStrength");
+                r.style.specStrength = ss > 0 ? (float)std::clamp(ss / 100.0, 0.1, 1.0) : 1.0f;
+                r.style.powerStrength = cs > 0 ? (float)std::clamp(cs / 100.0, 0.1, 1.0) : 1.0f;
+                r.style.scroll = e.GetInt("texScroll") != 0;
+                r.style.atlasRows = std::clamp(e.GetInt("textureAtlasRowCount"), 1, 64);
+                r.style.atlasCols = std::clamp(e.GetInt("textureAtlasColumnCount"), 1, 64);
+                if (e.GetInt("nopicmipColor") || e.GetInt("nopicmipDetail") || e.GetInt("nopicmipNormal") || e.GetInt("nopicmipSpecular"))
+                    r.notes.push_back("nopicmip: the preview always shows the full resolution (picmip is not simulated)");
+            }
             std::string blend = e.GetString("blendFunc");
             r.style.blend = blend.rfind("Blend", 0) == 0 || blend.rfind("Multiply", 0) == 0;
             r.style.additive = blend.rfind("Add", 0) == 0 || blend.rfind("Screen", 0) == 0;
             r.style.doubleSided = e.GetString("cullFace").rfind("None", 0) == 0;
+            r.style.cullFront = e.GetString("cullFace").rfind("Front", 0) == 0;
             r.style.alphaTest = e.GetString("alphaTest").rfind("GE128", 0) == 0;
+            if (blend.rfind("Custom", 0) == 0)
+            {
+                auto& st = r.style;
+                st.customBlend = true; st.blend = true;
+                st.opRgb = ParseBlendOp(e.GetString("customBlendOpRgb")); st.opAlpha = ParseBlendOp(e.GetString("customBlendOpAlpha"));
+                st.srcRgb = ParseBlendFactor(e.GetString("srcCustomBlendFunc")); st.dstRgb = ParseBlendFactor(e.GetString("destCustomBlendFunc"));
+                st.srcAlpha = ParseBlendFactor(e.GetString("srcCustomBlendFuncAlpha")); st.dstAlpha = ParseBlendFactor(e.GetString("destCustomBlendFuncAlpha"));
+                st.additive = false;
+            }
             r.style.multiply = blend.rfind("Multiply", 0) == 0;
             r.style.screen = blend.rfind("Screen", 0) == 0;
             {
@@ -183,24 +256,11 @@ export namespace oa
                 if (e.GetString("colorWriteAlpha").rfind("Disable", 0) == 0) mask &= ~8u;
                 r.style.colorMask = mask;
             }
-            {
-                // filterColor: "mip standard (2x bilinear)*" | "<auto filter>*" | "bilinear" | "trilinear" | "anisotropic",
-                // "mip expensive (4x bilinear)", "mip more expensive (2x trilinear)", "mip most expensive (4x trilinear)",
-                // "nomip nearest" | "nearest", "nomip bilinear" | "linear"   (the file may use any of the aliases)
-                using F = SurfaceStyle::Filter;
-                std::string f = ToLower(e.GetString("filterColor"));
-                if (!f.empty() && f.back() == '*') f.pop_back();
-                if (f.rfind("nomip nearest", 0) == 0 || f == "nearest") r.style.filter = F::NoMipNearest;
-                else if (f.rfind("nomip bilinear", 0) == 0 || f == "linear") r.style.filter = F::NoMipLinear;
-                else if (f.find("most expensive") != std::string::npos) r.style.filter = F::Trilinear4x;
-                else if (f.find("more expensive") != std::string::npos || f == "trilinear") r.style.filter = F::Trilinear2x;
-                else if (f.find("expensive") != std::string::npos) r.style.filter = F::Bilinear4x;
-                else if (f.rfind("mip standard", 0) == 0 || f == "bilinear" || f == "<auto filter>") r.style.filter = F::Standard;
-                else if (f == "anisotropic") r.style.filter = F::Trilinear4x;
-            }
             consts["colorTint"] = e.GetColor("colorTint");
             consts["envMapParms"] = { (float)e.GetNumber("envMapMin"), (float)e.GetNumber("envMapMax"), (float)e.GetNumber("envMapExponent"), 0 };
             consts["detailScale"] = { (float)e.GetNumber("detailScaleX"), (float)e.GetNumber("detailScaleY"), 0, 0 };
+            consts["distortionScale"] = { (float)e.GetNumber("distortionScaleX"), (float)e.GetNumber("distortionScaleY"), 0, 0 };
+            consts["waterColor"] = { (float)e.GetNumber("waterColorR"), (float)e.GetNumber("waterColorG"), (float)e.GetNumber("waterColorB"), 1 };
 
             struct Map { const char* key; const char* semantic; };
             for (auto m : { Map{ "colorMap", "colorMap" }, Map{ "normalMap", "normalMap" }, Map{ "specColorMap", "specularMap" }, Map{ "detailMap", "detailMap" } })
@@ -283,8 +343,14 @@ export namespace oa
                     else tex = Special("$white");
                 }
                 else tex = Special("$white");   // sampler.white / feedback / outdoor ... have no preview equivalent
-                bool clamp = false;
-                sp.textures.push_back({ (int)c->reg, tex, clamp, clamp, src == "material.colorMap" });
+                bool clampU = false, clampV = false;
+                SurfaceStyle::Filter filter = SurfaceStyle::Filter::Default;
+                if (src.rfind("material.", 0) == 0)
+                {
+                    auto ms = m_mapState.find(src.substr(9));
+                    if (ms != m_mapState.end()) { clampU = !ms->second.tileU; clampV = !ms->second.tileV; filter = ms->second.filter; }
+                }
+                sp.textures.push_back({ (int)c->reg, tex, clampU, clampV, src == "material.colorMap", filter });
                 return;
             }
             if (src.rfind("material.", 0) == 0)
@@ -314,5 +380,7 @@ export namespace oa
         Project& m_project;
         const IwdArchive& m_iwds;
         std::map<std::string, std::shared_ptr<GpuTexture>> m_special;
+        struct MapState { bool tileU = true, tileV = true; SurfaceStyle::Filter filter = SurfaceStyle::Filter::Default; };
+        std::map<std::string, MapState> m_mapState;   // by semantic, filled from the GDT of the material being built
     };
 }

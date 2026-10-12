@@ -27,6 +27,16 @@ export namespace oa
     public:
         struct LodInfo { float distance = 0; std::string name; std::vector<std::string> materials; };
 
+        // The LODs of `<raw>/xmodel/<name>` (distance and surface file); empty if the model cannot be read.
+        static std::vector<LodInfo> Lods(const fs::path& rawDir, const std::string& name)
+        {
+            std::vector<unsigned char> hdr;
+            std::vector<LodInfo> lods;
+            std::string err;
+            if (ReadBinaryFile(rawDir / "xmodel" / name, hdr)) ParseHeader(hdr, lods, err);
+            return lods;
+        }
+
         // Loads LOD `lod` of `<raw>/xmodel/<name>` into `out` (world space at the bind pose, Z up).
         static bool Load(const fs::path& rawDir, const std::string& name, int lod, MeshData& out, std::string& error)
         {
