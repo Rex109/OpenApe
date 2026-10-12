@@ -85,6 +85,14 @@ export namespace oa
         int opRgb = 1, opAlpha = 1, srcRgb = 2, dstRgb = 1, srcAlpha = 2, dstAlpha = 1;
         // specColorStrength / cosinePowerStrength (0..1): scale the highlight of the built-in lighting
         float specStrength = 1.0f, powerStrength = 1.0f;
+        // materialType "water": the game builds an animated height map from the waterMap* options; so does the preview
+        struct WaterSim
+        {
+            bool on = false;
+            float length = 37, amplitude = 0.06f, windX = 1, windY = 0, windSpeed = 76;
+            int width = 64;
+            std::shared_ptr<GpuTexture> tex;
+        } water;
         // texScroll and texture atlases: animated by the preview on the shape meshes
         bool scroll = false;
         int atlasRows = 1, atlasCols = 1;
@@ -390,11 +398,23 @@ export namespace oa
             if (FAILED(m_dev->CreateVertexBuffer(g->vertexCount * sizeof(Vertex), D3DUSAGE_WRITEONLY, kFvf, D3DPOOL_MANAGED, &g->vb, nullptr))) return nullptr;
             void* p = nullptr;
             g->vb->Lock(0, 0, &p, 0); std::memcpy(p, m.vertices.data(), g->vertexCount * sizeof(Vertex)); g->vb->Unlock();
-            if (FAILED(m_dev->CreateVertexBuffer((UINT)(m.vertices.size() * 12), D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &g->vbPacked, nullptr))) return nullptr;
+            if (FAILED(m_dev->CreateVertexBuffer((UINT)(m.vertices.size() * 16), D3DUSAGE_WRITEONLY, 0, D3DPOOL_MANAGED, &g->vbPacked, nullptr))) return nullptr;
             UploadPacked(*g, m);
             if (FAILED(m_dev->CreateIndexBuffer(g->indexCount * 4, D3DUSAGE_WRITEONLY, D3DFMT_INDEX32, D3DPOOL_MANAGED, &g->ib, nullptr))) return nullptr;
             g->ib->Lock(0, 0, &p, 0); std::memcpy(p, m.indices.data(), g->indexCount * 4); g->ib->Unlock();
             return g;
+        }
+
+        // Overwrites the pixels of a BGRA8 texture created by CreateTexture (same size).
+        void UpdateTexture(GpuTexture& t, const std::vector<uint8_t>& bgra)
+        {
+            if (!t.tex || bgra.size() < (size_t)t.width * t.height * 4) return;
+            D3DLOCKED_RECT lr;
+            if (FAILED(t.tex->LockRect(0, &lr, nullptr, 0))) return;
+            for (int y = 0; y < t.height; ++y)
+                std::memcpy((uint8_t*)lr.pBits + (size_t)y * lr.Pitch, &bgra[(size_t)y * t.width * 4], (size_t)t.width * 4);
+            t.tex->UnlockRect(0);
+            if (t.tex->GetLevelCount() > 1) t.tex->GenerateMipSubLevels();
         }
 
         // Re-uploads the vertices of an animated mesh (same topology as when it was created).
@@ -407,6 +427,18 @@ export namespace oa
         }
 
     private:
+        // IEEE half float bits of a value (normal numbers only, which is all the game's shader decode handles)
+        static uint32_t HalfBits(float f)
+        {
+            uint32_t b; std::memcpy(&b, &f, 4);
+            uint32_t sign = (b >> 16) & 0x8000u;
+            int exp = (int)((b >> 23) & 0xFF) - 127 + 15;
+            uint32_t man = (b >> 13) & 0x3FFu;
+            if (exp <= 0) return sign;                       // zero / too small: the shader decodes it as ~0
+            if (exp >= 31) return sign | 0x7BFFu;            // clamp to the largest half
+            return sign | ((uint32_t)exp << 10) | man;
+        }
+
         void UploadPacked(GpuMesh& g, const MeshData& m)
         {
             if (!g.vbPacked) return;
@@ -424,6 +456,7 @@ export namespace oa
                     *out++ = pack(v.nx, v.ny, v.nz);
                     *out++ = pack(v.tx, v.ty, v.tz);
                     *out++ = pack(v.bx, v.by, v.bz);
+                    *out++ = HalfBits(v.v) | (HalfBits(v.u) << 16);   // the game's packed texture coordinates: two half floats
                 }
                 g.vbPacked->Unlock();
             }
@@ -455,6 +488,13 @@ export namespace oa
             if (FAILED(hr = m_dev->CreatePixelShader((const DWORD*)ps.bytes.data(), &out.ps))) return fail("pixel shader", hr);
             out.vsConsts = vs.constants; out.psConsts = ps.constants;
 
+            // the unpack constants (1/1024, 1/32768, 1/4, 1/128) of that decode are a signature in the shader's bytecode
+            bool packedUv = false;
+            {
+                static const uint32_t sig[4] = { 0x3A800000u, 0x38000000u, 0x3E800000u, 0x3C000000u };
+                for (size_t i = 0; i + 16 <= vs.bytes.size() && !packedUv; i += 4)
+                    packedUv = std::memcmp(&vs.bytes[i], sig, 16) == 0;
+            }
             std::vector<D3DVERTEXELEMENT9> el;
             for (auto& in : inputs)
             {
@@ -462,7 +502,12 @@ export namespace oa
                 const std::string& src = in.source;
                 if (src == "position") { offset = 0; }
                 else if (src == "normal") { stream = 1; offset = 0; type = D3DDECLTYPE_UBYTE4; }
-                else if (src.rfind("texcoord", 0) == 0) { offset = 24; type = D3DDECLTYPE_FLOAT2; }
+                else if (src.rfind("texcoord", 0) == 0)
+                {
+                    // some vertex shaders (the vertcol_simple ones) decode two packed half floats instead of reading floats
+                    if (packedUv) { stream = 1; offset = 12; type = D3DDECLTYPE_UBYTE4; }
+                    else { offset = 24; type = D3DDECLTYPE_FLOAT2; }
+                }
                 else if (src == "color") { offset = 32; type = D3DDECLTYPE_D3DCOLOR; }
                 else if (src == "tangent" || src == "normalTransform[0]") { stream = 1; offset = 4; type = D3DDECLTYPE_UBYTE4; }
                 else if (src == "binormal" || src == "normalTransform[1]") { stream = 1; offset = 8; type = D3DDECLTYPE_UBYTE4; }
@@ -986,7 +1031,7 @@ export namespace oa
             if (!ps || s.shader->passes.empty()) return;
             const ShaderPass& pass = s.shader->passes.front();
             m_dev->SetStreamSource(0, dc.mesh->vb.Get(), 0, sizeof(Vertex));
-            m_dev->SetStreamSource(1, dc.mesh->vbPacked.Get(), 0, 12);
+            m_dev->SetStreamSource(1, dc.mesh->vbPacked.Get(), 0, 16);
             m_dev->SetIndices(dc.mesh->ib.Get());
             m_dev->SetRenderState(D3DRS_CULLMODE, s.CullMode());
             m_dev->SetRenderState(D3DRS_LIGHTING, FALSE);
@@ -1048,7 +1093,7 @@ export namespace oa
             const SurfaceStyle& s = dc.style;
             const Submesh& sm = dc.mesh->submeshes[dc.submesh];
             m_dev->SetStreamSource(0, dc.mesh->vb.Get(), 0, sizeof(Vertex));
-            m_dev->SetStreamSource(1, dc.mesh->vbPacked.Get(), 0, 12);
+            m_dev->SetStreamSource(1, dc.mesh->vbPacked.Get(), 0, 16);
             m_dev->SetIndices(dc.mesh->ib.Get());
             m_dev->SetRenderState(D3DRS_CULLMODE, s.CullMode());
             m_dev->SetRenderState(D3DRS_LIGHTING, FALSE);

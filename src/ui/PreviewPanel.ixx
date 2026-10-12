@@ -250,6 +250,7 @@ export namespace oa::ui
             if (m_kind == Kind::Material)
             {
                 AnimateShapeUv();
+                if (m_style.water.on) m_shading.UpdateWater(m_style, ImGui::GetTime());
                 if (auto* mesh = ShapeMesh()) calls.push_back({ mesh, 0, m_style });
             }
             else if (m_kind == Kind::Weapon) m_weapon->Collect(calls);
@@ -569,6 +570,13 @@ export namespace oa::ui
                 m_cameraSubject = subject;
                 m_frameBefore = m_frameRequested;
             }
+            // a sky material is shown as the preview's sky box (its own shader draws nothing visible on a shape)
+            struct SkyOverride
+            {
+                PreviewPanel& p; std::string image;
+                ~SkyOverride() { p.UpdateSkyOverride(image); }
+            } skyOverride{ *this, rawMat ? SkyImageOfCompiled(m_session.previewRawMaterial)
+                                          : (e && IEquals(e->GdfName(), "material.gdf")) ? SkyImageOfGdt(*e) : std::string() };
             struct KeepCamera { PreviewPanel& p; ~KeepCamera() { if (p.m_keepCamera) p.m_frameRequested = p.m_frameBefore; } } keepCamera{ *this };
             m_overlay.clear(); m_message.clear(); m_model.reset(); m_subStyles.clear(); m_modelData = MeshData{};
             m_isAnim = false; m_posedMesh = MeshData{}; m_posedBones.clear();
@@ -1013,6 +1021,46 @@ export namespace oa::ui
             return r.style;
         }
 
+        // name of the cube image when `e` / the compiled material is a sky, else empty
+        std::string SkyImageOfGdt(const gdt::Entry& e) const
+        {
+            if (ToLower(e.GetString("materialType")) != "sky") return {};
+            return fs::path(NormalizeSlashes(e.GetString("colorMap"))).stem().string();
+        }
+
+        std::string SkyImageOfCompiled(const std::string& name)
+        {
+            const game::CompiledMaterial* cm = m_session.game.FindMaterial(name);
+            if (!cm || cm->techset != "sky") return {};
+            for (auto& t : cm->textures) if (t.semantic == "colorMap") return t.image;
+            return {};
+        }
+
+        void UpdateSkyOverride(const std::string& image)
+        {
+            if (image.empty())
+            {
+                if (m_skyOverridden) { m_skyOverridden = false; ApplySky(m_skyRestore); }
+                return;
+            }
+            if (!m_skyOverridden) { m_skyRestore = m_skyName; m_skyOverridden = true; }
+            std::string key = "material:" + image;
+            auto it = m_skyCache.find(key);
+            if (it == m_skyCache.end())
+            {
+                std::vector<unsigned char> bytes;
+                std::string err;
+                std::shared_ptr<GpuCube> cube;
+                if (ReadFileBytes(m_session.project.Root() / "raw" / "images" / (image + ".iwi"), bytes) || m_session.iwds.ReadImage(image, bytes))
+                    cube = m_renderer.CreateCube(image, bytes, err);
+                it = m_skyCache.emplace(key, std::move(cube)).first;
+            }
+            if (it->second) { m_opt.sky = it->second; m_opt.skybox = true; m_overlay.push_back("sky material: shown as the preview's sky box (look around with the mouse)"); }
+            else m_overlay.push_back("sky image '" + image + "' not found in raw/images or the game archives");
+        }
+
+        static bool ReadFileBytes(const fs::path& p, std::vector<unsigned char>& out) { return ReadBinaryFile(p, out); }
+
         void BuildMaterial(const gdt::Entry& e)
         {
             std::vector<std::string> notes;
@@ -1149,6 +1197,8 @@ export namespace oa::ui
         std::map<std::string, std::shared_ptr<GpuCube>> m_skyCache;
         int m_pendingFrame = -1;
         int m_lod = 0;
+        bool m_skyOverridden = false;
+        std::string m_skyRestore;
         std::string m_cameraSubject;
         bool m_keepCamera = false, m_frameBefore = false;
         std::string m_lodKey;

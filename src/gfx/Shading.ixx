@@ -4,6 +4,7 @@ module;
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <cstdint>
 #include <filesystem>
@@ -112,6 +113,23 @@ export namespace oa
             if (cm) FromCompiled(*cm, r, maps, consts, missing);
             for (auto& [sem, why] : missing) if (!maps.count(sem)) r.notes.push_back(why);
 
+            if (gdt && ToLower(gdt->GetString("materialType")) == "water")
+            {
+                // the height map the water shader reads is generated from the waterMap* options and animated every frame
+                auto& w = r.style.water;
+                w.on = true;
+                w.length = std::max(1.0f, (float)gdt->GetNumber("waterMapHorizontalWorldLength"));
+                w.amplitude = (float)gdt->GetNumber("waterMapAmplitude");
+                w.windX = (float)gdt->GetNumber("waterMapWindDirectionX"); w.windY = (float)gdt->GetNumber("waterMapWindDirectionY");
+                w.windSpeed = std::max(1.0f, (float)gdt->GetNumber("waterMapWindSpeed"));
+                w.width = std::clamp(gdt->GetInt("waterMapTextureWidth"), 16, 128);
+                ImageData img;
+                img.width = img.height = w.width; img.format = PixelFormat::BGRA8;
+                img.pixels.assign((size_t)w.width * w.width * 4, 128);
+                w.tex = m_renderer.CreateTexture(img);
+                if (w.tex) maps["normalMap"] = w.tex;
+                UpdateWater(r.style, 0.0);
+            }
             if (!maps.count("colorMap")) maps["colorMap"] = Special("$white");
             if (!maps.count("normalMap")) maps["normalMap"] = Special("$identitynormalmap");
             if (!maps.count("specularMap")) maps["specularMap"] = Special("$gray");
@@ -121,11 +139,14 @@ export namespace oa
             r.style.tint = consts["colorTint"];
 
             // compiled materials mark alpha testing in the techset name (l_sm_a0c0, ...)
-            if (cm && (cm->techset.find("_a0") != std::string::npos || cm->techset.rfind("a0", 0) == 0)) r.style.alphaTest = true;
+            if (!gdt && cm && (cm->techset.find("_a0") != std::string::npos || cm->techset.rfind("a0", 0) == 0)) r.style.alphaTest = true;
 
             if (mode == ShadeMode::Fixed || !m_game.Available()) return r;
 
-            std::string techset = cm ? cm->techset : GuessTechset(gdt);
+            // The GDT is what the user is editing: its material type and maps decide the techset, so changing them changes the
+            // preview. The compiled material (which may be out of date) is only used when the GDT does not name a known techset.
+            std::string fromGdt = gdt ? TechsetForGdt(*gdt) : std::string();
+            std::string techset = !fromGdt.empty() ? fromGdt : cm ? cm->techset : GuessTechset(gdt);
             r.techset = techset;
             bool sm_additive = false;
             // not every techset implements every technique; fall back to the closest one that exists
@@ -144,13 +165,17 @@ export namespace oa
                 r.notes.push_back("techset '" + techset + "' not found, using " + GuessTechset(gdt));
                 techset = GuessTechset(gdt);
             }
+            // water has its own sun-lit technique (there is no editor "sunlight preview" for it)
+            if (techset == "water" || techset == "w_water") { wanted = { "lit sun", "unlit", "fakelight normal" }; techName = wanted.front(); }
+            // unlit and effect techsets have no lighting to preview: their own unlit technique is the material
+            if (techset.find("unlit") != std::string::npos || techset.rfind("effect", 0) == 0) { wanted = { "unlit", "fakelight normal" }; techName = wanted.front(); }
             // A material whose in-game lit and unlit techniques are one and the same shader (a custom effect that ignores the
             // lights) looks like that in the game; the editor's own "sunlight preview" technique would show a stock lit shader.
             if (mode == ShadeMode::Sun)
             {
                 const game::Technique* unlit = m_game.FindTechnique(techset, "unlit");
                 const game::Technique* litSun = m_game.FindTechnique(techset, "lit sun");
-                if (unlit && litSun && unlit->file == litSun->file)
+                if (unlit && litSun && unlit->file == litSun->file && techset.find("unlit") == std::string::npos)
                 {
                     wanted = { "unlit", "fakelight normal" };
                     techName = wanted.front();
@@ -191,10 +216,118 @@ export namespace oa
                     const game::ShaderCode* code = ref == &pass.vertex ? vs : ps;
                     for (auto& b : ref->bindings) Bind(b, *code, maps, consts, sp);
                 }
+                // samplers the technique does not bind are fed by the engine at run time (reflection probes, ...): give them a
+                // neutral texture instead of leaving whatever was bound last
+                for (auto& c : ps->constants)
+                {
+                    if (c.regSet != 3) continue;
+                    bool bound = false;
+                    for (auto& t : sp.textures) if (t.sampler == (int)c.reg) bound = true;
+                    if (!bound)
+                        sp.textures.push_back({ (int)c.reg, Special(c.name.find("reflection") != std::string::npos ? "$skyprobe" : "$white"), false, false, false });
+                }
                 sm->passes.push_back(std::move(sp));
             }
             r.style.shader = std::move(sm);
             return r;
+        }
+
+        // Fills the water height map for time `t` (seconds): a sum of travelling waves whose wave numbers tile the map and
+        // whose strength follows a wind-driven spectrum (long waves along the wind dominate), like the game's generator.
+        void UpdateWater(const SurfaceStyle& s, double t)
+        {
+            const auto& w = s.water;
+            if (!w.on || !w.tex) return;
+            struct Wave { float kx, ky, amp, omega, phase; };
+            static std::vector<Wave> base;
+            std::vector<Wave> waves;
+            const float g = 386.0f, tau = 6.2831853f;
+            float wl = std::sqrt(w.windX * w.windX + w.windY * w.windY);
+            float wx = wl > 1e-4f ? w.windX / wl : 1.0f, wy = wl > 1e-4f ? w.windY / wl : 0.0f;
+            float largest = w.windSpeed * w.windSpeed / g;
+            uint32_t seed = 12345;
+            auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0f; };
+            float sum = 0;
+            for (int i = 0; i < 32; ++i)
+            {
+                int nx = (int)std::lround(rnd() * 12 - 6), ny = (int)std::lround(rnd() * 12 - 6);
+                if (nx == 0 && ny == 0) { nx = 1; }
+                float kx = tau * nx / w.length, ky = tau * ny / w.length, k = std::sqrt(kx * kx + ky * ky);
+                float align = (kx * wx + ky * wy) / k;
+                float spectrum = std::exp(-1.0f / (k * k * largest * largest)) / (k * k * k * k) * align * align;
+                float amp = std::pow(std::max(spectrum, 1e-30f), 0.2f) * (0.6f + 0.8f * rnd());   // flattened so the small ripples show too
+                waves.push_back({ kx, ky, amp, std::sqrt(g * k), rnd() * tau });
+                sum += amp;
+            }
+            if (sum <= 0) return;
+            float norm = std::clamp(w.amplitude * 14.0f, 0.2f, 0.8f) / sum * 2.5f;
+            std::vector<uint8_t> px((size_t)w.width * w.width * 4);
+            for (int y = 0; y < w.width; ++y)
+                for (int x = 0; x < w.width; ++x)
+                {
+                    float wx2 = w.length * x / w.width, wy2 = w.length * y / w.width, h = 0;
+                    for (auto& wv : waves) h += wv.amp * std::cos(wv.kx * wx2 + wv.ky * wy2 - wv.omega * (float)t * 0.5f + wv.phase);
+                    uint8_t c = (uint8_t)std::clamp((int)((0.5f + h * norm) * 255.0f), 0, 255);
+                    size_t o = ((size_t)y * w.width + x) * 4;
+                    px[o] = px[o + 1] = px[o + 2] = c; px[o + 3] = 255;
+                }
+            m_renderer.UpdateTexture(*w.tex, px);
+        }
+
+        // The techset the game's material tool picks for a GDT material, derived from the compiled materials of the stock
+        // tree: "l_sm_" + r/b/a/t (replace, blend, add, alpha test) + "c0" + d0 n0 s0 for the detail / normal / specular maps,
+        // "unlit", "2d", "effect", "sky", and a custom material's customString. Empty when no such techset exists.
+        std::string TechsetForGdt(const gdt::Entry& e) const
+        {
+            std::string type = ToLower(e.GetString("materialType"));
+            auto first = [&](const std::vector<std::string>& names) {
+                for (auto& n : names) if (m_game.TechsetExists(n)) return n;
+                return std::string();
+            };
+            if (type == "custom")
+            {
+                std::string cs = e.GetString("customString");
+                return !cs.empty() && m_game.TechsetExists(cs) ? cs : std::string();
+            }
+            if (type == "2d") return first({ "2d" });
+            if (type == "effect") return first({ "effect" });
+            if (type == "sky") return first({ "sky" });
+            if (type == "water") return first({ "water", "w_water" });
+            if (type.find("unlit") != std::string::npos)
+            {
+                // textured unlit materials use the w_ / m_ variants; "unlit" alone is the untextured vertex-colour one
+                std::string blend = e.GetString("blendFunc");
+                std::string suffix = blend.rfind("Blend", 0) == 0 ? "_blend" : blend.rfind("Add", 0) == 0 ? "_add"
+                                   : e.GetString("alphaTest").rfind("GE128", 0) == 0 ? "_alphatest" : "";
+                std::string pre = type.rfind("model", 0) == 0 ? "m_" : "w_";
+                bool textured = !e.GetString("colorMap").empty();
+                if (textured) return first({ pre + "unlit" + suffix, "m_unlit" + suffix, pre + "unlit", "m_unlit", "unlit" });
+                return first({ "unlit" });
+            }
+            if (type == "world phong" || type == "model phong" || type == "model ambient")
+            {
+                std::string blend = e.GetString("blendFunc");
+                char mode = 'r';
+                if (blend.rfind("Blend", 0) == 0) mode = 'b';
+                else if (blend.rfind("Add", 0) == 0) mode = 'a';
+                else if (e.GetString("alphaTest").rfind("GE128", 0) == 0) mode = 't';
+                bool det = !e.GetString("detailMap").empty(), nrm = !e.GetString("normalMap").empty(), spc = !e.GetString("specColorMap").empty();
+                std::string base = std::string(1, mode) + "0c0";
+                std::vector<std::string> names;
+                for (const char* pre : { "l_sm_scroll_", "l_sm_" })
+                {
+                    if (pre[5] == 's' && e.GetInt("texScroll") == 0) continue;   // the scrolling variants only for texScroll
+                    std::string d = det ? "d0" : "", n = nrm ? "n0" : "", s = spc ? "s0" : "";
+                    names.push_back(pre + base + d + n + s);
+                    names.push_back(pre + base + d + n);
+                    names.push_back(pre + base + n + s);
+                    names.push_back(pre + base + n);
+                    names.push_back(pre + base + s);
+                    names.push_back(pre + base);
+                }
+                return first(names);
+            }
+            return {};
         }
 
         // First of the plausible techset names that exists in raw/techsets.
@@ -332,6 +465,26 @@ export namespace oa
             uint8_t b = 255, g = 255, r = 255, a = 255;
             if (name == "$black") { b = g = r = 0; }
             else if (name == "$gray" || name == "$grey") { b = g = r = 128; }
+            else if (name == "$skyprobe") { b = 225; g = 185; r = 150; }   // a pale sky blue standing in for a reflection probe
+            else if (name == "$waterheight")
+            {
+                // tileable ripples: the water shader reads the red channel as the height of the surface
+                ImageData w;
+                w.width = w.height = 128; w.format = PixelFormat::BGRA8;
+                const float tau = 6.2831853f;
+                for (int y = 0; y < 128; ++y)
+                    for (int x = 0; x < 128; ++x)
+                    {
+                        float u = x / 128.0f, v = y / 128.0f;
+                        float h = 0.5f + 0.16f * std::sin(tau * (3 * u + 2 * v)) + 0.12f * std::sin(tau * (5 * u - 4 * v + 0.3f))
+                                + 0.08f * std::sin(tau * (9 * u + 7 * v + 0.6f)) + 0.05f * std::sin(tau * (14 * u - 11 * v));
+                        uint8_t c = (uint8_t)std::clamp((int)(h * 255.0f), 0, 255);
+                        w.pixels.push_back(c); w.pixels.push_back(c); w.pixels.push_back(c); w.pixels.push_back(255);
+                    }
+                auto t = m_renderer.CreateTexture(w);
+                m_special[name] = t;
+                return t;
+            }
             else if (name == "$identitynormalmap") { b = 255; g = 129; r = 128; a = 130; }   // the game stores normal x in alpha, scaled so that 130 == 0
             ImageData img;
             img.width = img.height = 4; img.format = PixelFormat::BGRA8;
