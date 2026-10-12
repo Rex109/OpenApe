@@ -33,7 +33,7 @@ import openape.ui.weapon;
 
 export namespace oa::ui
 {
-    enum class Shape { Sphere, Cube, Cylinder, Cone, Torus, Plane };
+    enum class Shape { Sphere, Cube, Cylinder, Cone, Torus, Plane, TiledPlane };
 
     // The 3D / 2D view. Materials are shown on a primitive, models in 3D, images as a flat picture.
     class PreviewPanel
@@ -52,7 +52,7 @@ export namespace oa::ui
         void SetFrame(int f) { m_pendingFrame = f; }
         void SetWeaponAnim(const std::string& n) { m_pendingWeaponAnim = n; }
         void SetFirstPerson(bool on) { m_fpv = on; }
-        void SetShape(int sh) { m_shape = (Shape)std::clamp(sh, 0, 5); m_frameRequested = true; }
+        void SetShape(int sh) { m_shape = (Shape)std::clamp(sh, 0, 6); m_frameRequested = true; }
         void SetMode(int m) { m_mode = (ShadeMode)std::clamp(m, 0, 3); m_signature.clear(); }
         void OnDeviceLost() { m_target.Release(); m_opt.sky.reset(); m_skyCache.clear(); }
         void OnDeviceReset() { if (!m_skyName.empty()) { auto n = m_skyName; ApplySky(n); } }
@@ -90,9 +90,6 @@ export namespace oa::ui
             if (IconButton("light", Icon::Bulb, ic, "Lighting and environment", !m_opt.lighting)) ImGui::OpenPopup("##lightmenu");
             if (ImGui::BeginPopup("##lightmenu"))
             {
-                if (ImGui::MenuItem("Wireframe", nullptr, m_opt.wireframe)) m_opt.wireframe = !m_opt.wireframe;
-                if (ImGui::MenuItem("No Lighting", nullptr, !m_opt.lighting)) { m_opt.lighting = !m_opt.lighting; m_signature.clear(); }
-                ImGui::Separator();
                 if (ImGui::BeginMenu("Shading"))
                 {
                     ImGui::TextDisabled("The Game modes run the real shaders from raw/shader_bin");
@@ -365,7 +362,7 @@ export namespace oa::ui
                 {
                     struct S { const char* n; Shape s; };
                     for (auto& it : { S{ "Sphere", Shape::Sphere }, S{ "Cube", Shape::Cube }, S{ "Cylinder", Shape::Cylinder },
-                                      S{ "Cone", Shape::Cone }, S{ "Torus", Shape::Torus }, S{ "Plane", Shape::Plane } })
+                                      S{ "Cone", Shape::Cone }, S{ "Torus", Shape::Torus }, S{ "Plane", Shape::Plane }, S{ "Large tiled plane (6x6 repeats)", Shape::TiledPlane } })
                         if (ImGui::MenuItem(it.n, nullptr, m_shape == it.s)) { m_shape = it.s; m_frameRequested = true; }
                     ImGui::EndMenu();
                 }
@@ -461,7 +458,7 @@ export namespace oa::ui
         // ------------------------------------------------------------------ scene building
         float ShapeRadius() const
         {
-            static const float r[6] = { 1.0f, 1.4f, 1.15f, 1.15f, 1.05f, 1.45f };
+            static const float r[7] = { 1.0f, 1.4f, 1.15f, 1.15f, 1.05f, 1.45f, 7.0f };
             return r[(int)m_shape];
         }
 
@@ -479,6 +476,7 @@ export namespace oa::ui
                 case Shape::Cone: md = MeshData::Cylinder(true); break;
                 case Shape::Torus: md = MeshData::Torus(); break;
                 case Shape::Plane: md = MeshData::Plane(); break;
+                case Shape::TiledPlane: md = MeshData::TiledPlane(); break;
                 }
                 slot = m_renderer.CreateMesh(md);
                 m_shapeBase[(int)m_shape] = std::move(md);
@@ -1103,7 +1101,7 @@ export namespace oa::ui
         ShadeMode m_mode = ShadeMode::Sun;
         Kind m_kind = Kind::None;
         Shape m_shape = Shape::Sphere;
-        std::unique_ptr<GpuMesh> m_shapes[6];
+        std::unique_ptr<GpuMesh> m_shapes[7];
         std::unique_ptr<GpuMesh> m_model;
         MeshData m_modelData;
         SurfaceStyle m_style;
@@ -1129,8 +1127,8 @@ export namespace oa::ui
         int m_lod = 0;
         std::string m_lodKey;
         std::vector<std::string> m_lodLabels;
-        MeshData m_shapeBase[6];
-        bool m_shapeUvDirty[6] = {};
+        MeshData m_shapeBase[7];
+        bool m_shapeUvDirty[7] = {};
         std::string m_pendingWeaponAnim;
         bool m_fpv = false;
         float m_fpvFovDeg = 90.0f, m_orbitFovDeg = 40.0f;

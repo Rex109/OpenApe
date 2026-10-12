@@ -212,8 +212,10 @@ export namespace oa::ui
             auto X = [&](float x) { return d > 0 ? x : 16 - x; };
             dl->AddCircleFilled(P(8, 8), 7 * u, IM_COL32(70, 140, 235, 255));
             dl->AddCircle(P(8, 8), 7 * u, IM_COL32(200, 225, 255, 255), 0, std::max(1.f, u));
-            dl->AddTriangleFilled(P(X(3.5f), 8), P(X(8), 4), P(X(8), 12), IM_COL32(255, 255, 255, 255));
-            dl->AddRectFilled(P(X(8), 6.6f), P(X(12.5f), 9.4f), IM_COL32(255, 255, 255, 255));
+            // the mirrored icon must keep a consistent winding and ordered rectangle corners, or the fill renders garbled
+            if (d > 0) dl->AddTriangleFilled(P(3.5f, 8), P(8, 4), P(8, 12), IM_COL32(255, 255, 255, 255));
+            else dl->AddTriangleFilled(P(12.5f, 8), P(8, 12), P(8, 4), IM_COL32(255, 255, 255, 255));
+            dl->AddRectFilled(P(std::min(X(8), X(12.5f)), 6.6f), P(std::max(X(8), X(12.5f)), 9.4f), IM_COL32(255, 255, 255, 255));
             break;
         }
         case Icon::Refresh:

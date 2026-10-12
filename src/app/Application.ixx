@@ -91,6 +91,7 @@ export namespace oa
                 else if (a == "--image") m_shotImage = argv[i + 1];
                 else if (a == "--raw-material") m_shotRawMat = argv[i + 1];
                 else if (a == "--raw-anim") m_shotRawAnim = argv[i + 1];
+                else if (a == "--then") m_testThen = argv[i + 1];
                 else if (a == "--weapon-anim") m_preview->SetWeaponAnim(argv[i + 1]);
             }
             OpenInitialProject(argc, argv, exeDir);
@@ -222,13 +223,16 @@ export namespace oa
         void ReloadAll()
         {
             int skipped = 0;
+            auto nav = m_session.SnapshotNav();
             for (auto& g : m_session.project.Gdts())
             {
                 if (g->Dirty()) { ++skipped; continue; }
                 m_session.project.ReloadGdt(*g);
             }
-            // entries were recreated: drop everything that points at them
-            m_session.tabs.clear(); m_session.activeTab = -1; m_session.backStack.clear(); m_session.forwardStack.clear(); m_session.undo.Clear();
+            // entries were recreated: find the selected assets and the history again by name
+            m_session.undo.Clear();
+            m_session.RestoreNav(nav);
+            m_appliedTab = -2;
             m_assets->ForceRebuild();
             m_session.Notify(skipped ? "Reloaded; " + std::to_string(skipped) + " file(s) with unsaved changes were skipped" : "Reloaded all GDT files");
         }
@@ -537,6 +541,9 @@ export namespace oa
                     size_t eq = m_testEdit.find('=');
                     m_session.SetValue(*e, m_testEdit.substr(0, eq), m_testEdit.substr(eq + 1));
                 }
+            if (f == 3 && !m_testThen.empty())
+                for (auto& g : m_session.project.Gdts())
+                    if (auto* e = g->Find(m_testThen)) { m_session.Open(e); break; }
             if (m_testClickX >= 0)
             {
                 if (f == 5) io.AddMousePosEvent((float)m_testClickX, (float)m_testClickY);
@@ -546,7 +553,7 @@ export namespace oa
             if (f == 11 && !m_testLog.empty())
             {
                 std::string out = "can-undo=" + std::to_string((int)m_session.undo.CanUndo()) + " can-redo=" + std::to_string((int)m_session.undo.CanRedo()) +
-                                  " tabs=" + std::to_string(m_session.tabs.size());
+                                  " tabs=" + std::to_string(m_session.tabs.size()) + " back=" + std::to_string(m_session.backStack.size()) + " fwd=" + std::to_string(m_session.forwardStack.size());
                 if (auto* e = m_session.Selected()) out += " selected=" + e->Name() + " usage=" + e->GetString("usage");
                 WriteTextFile(m_testLog, out + "\n");
             }
@@ -933,7 +940,7 @@ export namespace oa
 
         std::string m_shotPath, m_shotSelect, m_shotShape, m_shotRawModel, m_shotRawMat, m_shotRawAnim, m_shotImage;
         int m_frameCount = 0, m_testClickX = -1, m_testClickY = -1;
-        std::string m_testEdit, m_testLog;
+        std::string m_testEdit, m_testLog, m_testThen;
         std::string m_propFilter, m_rawFilter;
         std::vector<std::vector<std::string>> m_rawLists;
         int m_rawTab = 0;

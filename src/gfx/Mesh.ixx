@@ -254,6 +254,16 @@ export namespace oa
             return m.Finish();
         }
 
+        // A large square (half size `half`) whose texture coordinates run 0..tiles: the texture repeats `tiles` x `tiles` times,
+        // which shows seams and clamp / repeat behaviour.
+        static MeshData TiledPlane(float half = 6.0f, float tiles = 6.0f)
+        {
+            MeshData m;
+            m.vertices = { { -half, -half, 0, 0, 0, 1, 0, tiles }, { half, -half, 0, 0, 0, 1, tiles, tiles }, { half, half, 0, 0, 0, 1, tiles, 0 }, { -half, half, 0, 0, 0, 1, 0, 0 } };
+            m.AddQuad(0, 1, 2, 3);
+            return m.Finish();
+        }
+
         static MeshData Plane()
         {
             MeshData m;

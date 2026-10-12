@@ -127,7 +127,11 @@ export namespace oa
                 std::string type = e.GdfName();
                 if (EndsWith(ToLower(type), ".gdf")) type.resize(type.size() - 4);
                 bool ok = false;
-                for (auto& t : Split(types)) if (IContains(type, t) || (e.Def() && IContains(e.Def()->displayName, t))) { ok = true; break; }
+                // whole type names (the picker stores exact ones, so "vehicle" must not also match "vehicleweapon"); * and ? work as wildcards
+                auto same = [](const std::string& have, const std::string& want) {
+                    return want.find_first_of("*?") != std::string::npos ? WildcardMatch(have, want) : ToLower(have) == ToLower(want);
+                };
+                for (auto& t : Split(types)) if (same(type, t) || (e.Def() && same(e.Def()->displayName, t))) { ok = true; break; }
                 if (!ok) return false;
             }
             if (valuesOn && !values.empty())
@@ -183,6 +187,7 @@ export namespace oa
         int accentTheme = 0;             // index into ui::AccentThemes(), 0 = Treyarch
         bool showPreviewInfo = true;     // the debug/info text in the corner of the preview
         std::vector<gdt::Entry*> backStack, forwardStack;
+        gdt::Entry* lastOpened = nullptr;
 
         // Preview override: show this image file instead of the selected asset.
         fs::path previewImage;
@@ -250,7 +255,7 @@ export namespace oa
         // ---- project -----------------------------------------------------------------
         bool OpenRoot(const fs::path& root)
         {
-            tabs.clear(); activeTab = -1; backStack.clear(); forwardStack.clear(); undo.Clear(); previewImage.clear();
+            tabs.clear(); activeTab = -1; backStack.clear(); forwardStack.clear(); lastOpened = nullptr; undo.Clear(); previewImage.clear();
             bool ok = project.Open(root);
             game.Open(root);
             if (ok) skeletons.Build(root / "raw");
@@ -277,11 +282,7 @@ export namespace oa
         void Open(gdt::Entry* e, bool recordHistory = true)
         {
             if (!e) return;
-            if (recordHistory)
-            {
-                if (auto* cur = Selected(); cur && cur != e) backStack.push_back(cur);
-                forwardStack.clear();
-            }
+            if (recordHistory) RecordVisit(e); else lastOpened = e;
             // selecting an asset shows it in the current tab; only an explicit request opens another one
             if (activeTab < 0 || activeTab >= (int)tabs.size()) NewTab();
             tabs[activeTab].entry = e;
@@ -291,8 +292,7 @@ export namespace oa
         void OpenInNewTab(gdt::Entry* e)
         {
             if (!e) return;
-            if (auto* cur = Selected(); cur && cur != e) backStack.push_back(cur);
-            forwardStack.clear();
+            RecordVisit(e);
             NewTab();
             tabs[activeTab].entry = e;
         }
@@ -309,6 +309,7 @@ export namespace oa
         {
             if (i == activeTab || i < 0 || i >= (int)tabs.size()) return;
             activeTab = i;
+            if (tabs[i].entry) RecordVisit(tabs[i].entry);
             previewImage.clear(); previewRawModel.clear(); previewRawMaterial.clear(); previewRawAnim.clear();
         }
 
@@ -324,8 +325,55 @@ export namespace oa
         void ForgetEntry(const gdt::Entry* e)
         {
             for (auto& t : tabs) if (t.entry == e) t.entry = nullptr;
+            if (lastOpened == e) lastOpened = nullptr;
             auto drop = [e](std::vector<gdt::Entry*>& v) { v.erase(std::remove(v.begin(), v.end(), e), v.end()); };
             drop(backStack); drop(forwardStack);
+        }
+
+        // Tabs and history by name, so they survive a reload that recreates every entry.
+        struct NavSnapshot
+        {
+            struct Ref { std::string gdf, name; bool valid = false; };
+            std::vector<Ref> tabs; std::vector<int> uids;
+            int active = -1;
+            std::vector<Ref> back, forward;
+            Ref last;
+        };
+        static NavSnapshot::Ref RefOf(const gdt::Entry* e)
+        {
+            NavSnapshot::Ref r;
+            if (e) { r.gdf = e->GdfName(); r.name = e->Name(); r.valid = true; }
+            return r;
+        }
+        NavSnapshot SnapshotNav() const
+        {
+            NavSnapshot s;
+            for (auto& t : tabs) { s.tabs.push_back(RefOf(t.entry)); s.uids.push_back(t.uid); }
+            s.active = activeTab;
+            for (auto* e : backStack) s.back.push_back(RefOf(e));
+            for (auto* e : forwardStack) s.forward.push_back(RefOf(e));
+            s.last = RefOf(lastOpened);
+            return s;
+        }
+        void RestoreNav(const NavSnapshot& s)
+        {
+            auto find = [&](const NavSnapshot::Ref& r) -> gdt::Entry* { return r.valid ? project.FindEntry(r.gdf, r.name) : nullptr; };
+            tabs.clear();
+            for (size_t i = 0; i < s.tabs.size(); ++i) tabs.push_back({ find(s.tabs[i]), s.uids[i] });
+            activeTab = tabs.empty() ? -1 : std::clamp(s.active, 0, (int)tabs.size() - 1);
+            backStack.clear(); forwardStack.clear();
+            for (auto& r : s.back) if (auto* e = find(r)) backStack.push_back(e);
+            for (auto& r : s.forward) if (auto* e = find(r)) forwardStack.push_back(e);
+            lastOpened = find(s.last);
+        }
+
+        // The history follows what the user looked at, whichever tab it was shown in.
+        void RecordVisit(gdt::Entry* e)
+        {
+            if (!e || e == lastOpened) return;
+            if (lastOpened) backStack.push_back(lastOpened);
+            forwardStack.clear();
+            lastOpened = e;
         }
 
         bool CanGoBack() const { return !backStack.empty(); }
@@ -333,14 +381,14 @@ export namespace oa
         void GoBack()
         {
             if (backStack.empty()) return;
-            if (auto* cur = Selected()) forwardStack.push_back(cur);
+            if (lastOpened) forwardStack.push_back(lastOpened);
             auto* e = backStack.back(); backStack.pop_back();
             Open(e, false);
         }
         void GoForward()
         {
             if (forwardStack.empty()) return;
-            if (auto* cur = Selected()) backStack.push_back(cur);
+            if (lastOpened) backStack.push_back(lastOpened);
             auto* e = forwardStack.back(); forwardStack.pop_back();
             Open(e, false);
         }
