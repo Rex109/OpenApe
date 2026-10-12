@@ -67,6 +67,15 @@ export namespace oa
         bool blend = false, additive = false;
         bool doubleSided = false;
         bool alphaTest = false;   // cut-out material: texels with alpha < 128 are discarded
+        // texture filtering of the colour map (the material's filterColor)
+        enum class Filter { Default, NoMipNearest, NoMipLinear, Standard, Bilinear4x, Trilinear2x, Trilinear4x } filter = Filter::Default;
+        // raster state of the material (blendFunc extras, depthTest, depthWrite, polygonOffset, colorWrite*)
+        bool multiply = false, screen = false;
+        int depthFunc = 4;          // D3DCMP_LESSEQUAL
+        int depthWrite = -1;        // -1 auto, 0 off, 1 on
+        int polyOffset = 0;         // 0 none, 1 static decal, 2 weapon impact
+        unsigned colorMask = 0xF;
+        bool noDepthTest = false;
         std::shared_ptr<ShaderMaterial> shader;   // when set, drawn with the game's own shaders
     };
 
@@ -108,6 +117,10 @@ export namespace oa
 
         float radius = 1.0f;
 
+        // first-person mode: look from `fpEye` along `fpDir` (an in-game view) instead of orbiting the target
+        bool firstPerson = false;
+        Vec3 fpEye{ 0, 0, 0 }, fpDir{ 1, 0, 0 }, fpUp{ 0, 0, 1 };
+
         void Frame(const Vec3& centre, float r)
         {
             float radius = r;
@@ -115,7 +128,7 @@ export namespace oa
             target = centre;
             distance = std::max(radius, 0.001f) / std::sin(fov * 0.5f) * 1.15f;
         }
-        Mat4 View() const { return Mat4::LookAtZUpRH(Eye(), target, { 0, 0, 1 }); }
+        Mat4 View() const { return firstPerson ? Mat4::LookAtZUpRH(fpEye, fpEye + fpDir, fpUp) : Mat4::LookAtZUpRH(Eye(), target, { 0, 0, 1 }); }
         // The thing being looked at: its bounding sphere decides the clip planes.
         Vec3 subjectCenter{ 0, 0, 0 };
         float subjectRadius = 0;
@@ -143,6 +156,7 @@ export namespace oa
         }
         Vec3 Eye() const
         {
+            if (firstPerson) return fpEye;
             return target + Vec3{ std::cos(pitch) * std::cos(yaw), std::cos(pitch) * std::sin(yaw), std::sin(pitch) } * distance;
         }
     };
@@ -457,6 +471,7 @@ export namespace oa
             const GpuMesh* mesh;
             size_t submesh;
             SurfaceStyle style;
+            Mat4 world;           // placement of this draw call relative to the scene's world matrix
         };
 
         void RenderScene(RenderTarget& rt, const OrbitCamera& cam, const SceneOptions& opt, const std::vector<DrawCall>& calls, const Mat4& world, const OverlayGeometry* overlay = nullptr)
@@ -506,6 +521,9 @@ export namespace oa
                     for (auto& dc : calls)
                     {
                         if (!dc.mesh || !dc.mesh->vb || (dc.style.blend || dc.style.additive) != (pass == 1)) continue;
+                        Mat4 w = dc.world * world;
+                        m_dev->SetTransform(D3DTS_WORLD, (const D3DMATRIX*)&w);
+                        m_frame.world = w;
                         DrawSubmesh(dc, opt);
                     }
                 m_dev->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
@@ -741,6 +759,7 @@ export namespace oa
             m_dev->SetRenderState(D3DRS_SRCBLEND, s.additive ? D3DBLEND_SRCALPHA : D3DBLEND_SRCALPHA);
             m_dev->SetRenderState(D3DRS_DESTBLEND, s.additive ? D3DBLEND_ONE : D3DBLEND_INVSRCALPHA);
             m_dev->SetRenderState(D3DRS_ZWRITEENABLE, (s.blend || s.additive) ? FALSE : TRUE);
+            ApplyMaterialRaster(s);
             m_dev->SetRenderState(D3DRS_COLORVERTEX, FALSE);
             m_dev->SetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, D3DMCS_MATERIAL);
 
@@ -755,10 +774,7 @@ export namespace oa
                 m_dev->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
                 m_dev->SetSamplerState(0, D3DSAMP_ADDRESSU, s.tileU ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
                 m_dev->SetSamplerState(0, D3DSAMP_ADDRESSV, s.tileV ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
-                m_dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
-                m_dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-                m_dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-                m_dev->SetSamplerState(0, D3DSAMP_MAXANISOTROPY, std::min<DWORD>(8, m_caps.MaxAnisotropy));
+                SetFilter(0, s.filter);
             }
             else
             {
@@ -779,6 +795,7 @@ export namespace oa
                 m_dev->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, *(DWORD*)&slope);
             }
             m_dev->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, dc.mesh->vertexCount, sm.firstIndex, sm.indexCount / 3);
+            ResetMaterialRaster();
             SetAlphaTest(false);
             if (ambientOnly)
             {
@@ -842,6 +859,56 @@ export namespace oa
                 if (pixel) m_dev->SetPixelShaderConstantF(c.reg, v, regs);
                 else m_dev->SetVertexShaderConstantF(c.reg, v, regs);
             }
+        }
+
+        void SetFilter(int sampler, SurfaceStyle::Filter f)
+        {
+            using F = SurfaceStyle::Filter;
+            if (f == F::NoMipNearest || f == F::NoMipLinear)
+            {
+                const DWORD tf = f == F::NoMipNearest ? D3DTEXF_POINT : D3DTEXF_LINEAR;
+                m_dev->SetSamplerState(sampler, D3DSAMP_MINFILTER, tf);
+                m_dev->SetSamplerState(sampler, D3DSAMP_MAGFILTER, tf);
+                m_dev->SetSamplerState(sampler, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+                return;
+            }
+            // the game's mip filters: bilinear picks the nearest mip level, trilinear blends two; "2x"/"4x" is the anisotropy
+            DWORD aniso = 8, mip = D3DTEXF_LINEAR;
+            switch (f)
+            {
+            case F::Standard:    aniso = 2; mip = D3DTEXF_POINT; break;
+            case F::Bilinear4x:  aniso = 4; mip = D3DTEXF_POINT; break;
+            case F::Trilinear2x: aniso = 2; mip = D3DTEXF_LINEAR; break;
+            case F::Trilinear4x: aniso = 4; mip = D3DTEXF_LINEAR; break;
+            default: break;
+            }
+            m_dev->SetSamplerState(sampler, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
+            m_dev->SetSamplerState(sampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+            m_dev->SetSamplerState(sampler, D3DSAMP_MIPFILTER, mip);
+            m_dev->SetSamplerState(sampler, D3DSAMP_MAXANISOTROPY, std::min<DWORD>(aniso, m_caps.MaxAnisotropy));
+        }
+
+        // The material's own raster state, applied on top of the blend setup of the draw path (only for visible passes).
+        void ApplyMaterialRaster(const SurfaceStyle& s)
+        {
+            if (s.multiply) { m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE); m_dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_DESTCOLOR); m_dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ZERO); }
+            else if (s.screen) { m_dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE); m_dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_ONE); m_dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCCOLOR); }
+            m_dev->SetRenderState(D3DRS_ZFUNC, s.noDepthTest ? D3DCMP_ALWAYS : s.depthFunc);
+            if (s.depthWrite >= 0) m_dev->SetRenderState(D3DRS_ZWRITEENABLE, s.depthWrite ? TRUE : FALSE);
+            if (s.polyOffset)
+            {
+                float bias = s.polyOffset == 1 ? -0.00002f : -0.00004f, slope = s.polyOffset == 1 ? -1.0f : -2.0f;
+                m_dev->SetRenderState(D3DRS_DEPTHBIAS, *(DWORD*)&bias);
+                m_dev->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, *(DWORD*)&slope);
+            }
+            if (s.colorMask != 0xF) m_dev->SetRenderState(D3DRS_COLORWRITEENABLE, s.colorMask);
+        }
+        void ResetMaterialRaster()
+        {
+            m_dev->SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+            m_dev->SetRenderState(D3DRS_DEPTHBIAS, 0);
+            m_dev->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, 0);
+            m_dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
         }
 
         void SetAlphaTest(bool on)
@@ -927,10 +994,7 @@ export namespace oa
             m_dev->SetTexture(0, color ? color->tex.Get() : nullptr);
             m_dev->SetSamplerState(0, D3DSAMP_ADDRESSU, s.tileU ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
             m_dev->SetSamplerState(0, D3DSAMP_ADDRESSV, s.tileV ? D3DTADDRESS_WRAP : D3DTADDRESS_CLAMP);
-            m_dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
-            m_dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-            m_dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-            m_dev->SetSamplerState(0, D3DSAMP_MAXANISOTROPY, std::min<DWORD>(8, m_caps.MaxAnisotropy));
+            SetFilter(0, s.filter);
             m_dev->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, dc.mesh->vertexCount, sm.firstIndex, sm.indexCount / 3);
             m_dev->SetTexture(0, nullptr);
             SetAlphaTest(false);
@@ -988,6 +1052,7 @@ export namespace oa
                 m_dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
                 m_dev->SetRenderState(D3DRS_DESTBLEND, s.additive ? D3DBLEND_ONE : D3DBLEND_INVSRCALPHA);
                 m_dev->SetRenderState(D3DRS_ZWRITEENABLE, bl ? FALSE : TRUE);
+                ApplyMaterialRaster(s);
             }
             for (auto& pass : s.shader->passes)
             {
@@ -1001,16 +1066,13 @@ export namespace oa
                     m_dev->SetTexture(t.sampler, t.tex ? t.tex->tex.Get() : nullptr);
                     m_dev->SetSamplerState(t.sampler, D3DSAMP_ADDRESSU, t.clampU ? D3DTADDRESS_CLAMP : D3DTADDRESS_WRAP);
                     m_dev->SetSamplerState(t.sampler, D3DSAMP_ADDRESSV, t.clampV ? D3DTADDRESS_CLAMP : D3DTADDRESS_WRAP);
-                    m_dev->SetSamplerState(t.sampler, D3DSAMP_MINFILTER, D3DTEXF_ANISOTROPIC);
-                    m_dev->SetSamplerState(t.sampler, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-                    m_dev->SetSamplerState(t.sampler, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-                    m_dev->SetSamplerState(t.sampler, D3DSAMP_MAXANISOTROPY, std::min<DWORD>(8, m_caps.MaxAnisotropy));
+                    SetFilter(t.sampler, t.isColor ? s.filter : SurfaceStyle::Filter::Default);
                 }
                 m_dev->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, dc.mesh->vertexCount, sm.firstIndex, sm.indexCount / 3);
                 for (auto& t : pass.textures) m_dev->SetTexture(t.sampler, nullptr);
             }
             m_dev->SetStreamSource(1, nullptr, 0, 0);
-            m_dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
+            ResetMaterialRaster();
             m_dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
             SetAlphaTest(false);
             m_dev->SetVertexShader(nullptr);

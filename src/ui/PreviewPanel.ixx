@@ -29,6 +29,7 @@ import openape.gdt;
 import openape.project;
 import openape.session;
 import openape.ui.theme;
+import openape.ui.weapon;
 
 export namespace oa::ui
 {
@@ -38,7 +39,7 @@ export namespace oa::ui
     class PreviewPanel
     {
     public:
-        PreviewPanel(Renderer& r, Session& s) : m_renderer(r), m_session(s), m_shading(r, s.game, s.project, s.iwds) {}
+        PreviewPanel(Renderer& r, Session& s) : m_renderer(r), m_session(s), m_shading(r, s.game, s.project, s.iwds) { m_weapon = std::make_unique<WeaponScene>(r, s, m_shading); }
 
         void Invalidate() { m_signature.clear(); }
         void SetLight(int index) { m_envInit = true; ApplyLight(index); }
@@ -49,6 +50,8 @@ export namespace oa::ui
         void SetLookUp(float u) { m_zoomUp = u; }
         void SetPitch(float p) { m_pitchOverride = p; }
         void SetFrame(int f) { m_pendingFrame = f; }
+        void SetWeaponAnim(const std::string& n) { m_pendingWeaponAnim = n; }
+        void SetFirstPerson(bool on) { m_fpv = on; }
         void SetShape(int sh) { m_shape = (Shape)std::clamp(sh, 0, 5); m_frameRequested = true; }
         void SetMode(int m) { m_mode = (ShadeMode)std::clamp(m, 0, 3); m_signature.clear(); }
         void OnDeviceLost() { m_target.Release(); m_opt.sky.reset(); m_skyCache.clear(); }
@@ -60,17 +63,25 @@ export namespace oa::ui
             EnsureEnvironment();
             if (!image) Refresh();
             DrawToolbar();
-            if (!image && m_isAnim && m_kind == Kind::Model) DrawTimeline();
+            if (!image && m_kind == Kind::Weapon) DrawWeaponControls();
+            if (!image && m_isAnim && (m_kind == Kind::Model || m_kind == Kind::Weapon)) DrawTimeline();
             ImVec2 avail = ImGui::GetContentRegionAvail();
             if (avail.x < 8 || avail.y < 8) return;
 
             if (image) { DrawImageView(avail); return; }
             if (m_kind == Kind::None) { DrawMessage(avail, m_message.empty() ? "Select an asset to preview it" : m_message); return; }
+            if (m_kind == Kind::Weapon)
+            {
+                float hud = m_showHud ? std::min(m_weapon->HudHeight(), avail.y * 0.45f) : 0.0f;
+                DrawSceneView(ImVec2(avail.x, std::max(avail.y - hud - ImGui::GetStyle().ItemSpacing.y, 16.0f)));
+                if (m_showHud) m_weapon->DrawHud(ImVec2(avail.x, hud));
+                return;
+            }
             DrawSceneView(avail);
         }
 
     private:
-        enum class Kind { None, Material, Model };
+        enum class Kind { None, Material, Model, Weapon };
 
         // ------------------------------------------------------------------ toolbar
         void DrawToolbar()
@@ -131,18 +142,27 @@ export namespace oa::ui
             if (IconButton("grid", Icon::Grid, ic, "Floor grid", m_opt.grid)) m_opt.grid = !m_opt.grid;
             ImGui::SameLine(0, 2);
             if (IconButton("info", Icon::Info, ic, "Show or hide the info text in the corner of the view", m_session.showPreviewInfo)) m_session.showPreviewInfo = !m_session.showPreviewInfo;
-            bool modelShown = m_kind == Kind::Model && m_session.previewImage.empty();
+            bool modelShown = (m_kind == Kind::Model || m_kind == Kind::Weapon) && m_session.previewImage.empty();
             if (modelShown)
             {
                 ImGui::SameLine(0, 2);
-                bool has = !m_modelData.bones.empty();
+                bool has = m_kind == Kind::Weapon ? !m_weaponBones.empty() : !m_modelData.bones.empty();
                 ImGui::BeginDisabled(!has);
                 if (IconButton("bones", Icon::Bone, ic, has ? "Show the skeleton" : "This model has no bones", m_showBones && has)) m_showBones = !m_showBones;
                 ImGui::SameLine(0, 2);
                 if (IconButton("bonenames", Icon::Tag, ic, "Show bone names (works with or without the bone shapes)", m_showBoneNames && has)) m_showBoneNames = !m_showBoneNames;
                 ImGui::EndDisabled();
+                if (m_kind == Kind::Weapon)
+                {
+                    ImGui::SameLine(0, 2);
+                    bool can = m_weapon->CurrentView() == WeaponScene::View::ViewModel;
+                    ImGui::BeginDisabled(!can);
+                    if (IconButton("fpv", Icon::Eye, ic, can ? "Look through the camera bone (tag_camera) as in game" : "Only available for the view model", m_fpv && can))
+                    { m_fpv = !m_fpv; if (!m_fpv) m_frameRequested = true; }
+                    ImGui::EndDisabled();
+                }
             }
-            if (!m_isAnim || m_kind != Kind::Model)
+            if (!(m_isAnim && (m_kind == Kind::Model || m_kind == Kind::Weapon)))
             {
                 ImGui::SameLine(0, Theme::S(14));
                 if (IconButton("prev", Icon::Prev, ic, "Rotate back")) m_cam.yaw -= 0.26f;
@@ -188,12 +208,28 @@ export namespace oa::ui
                 m_frameRequested = false;
                 m_cam = OrbitCamera{};
                 if (m_kind == Kind::Model && m_model && !m_modelData.Empty()) m_cam.Frame(m_modelData.Center(), m_modelData.Radius() * 0.8f);
+                else if (m_kind == Kind::Weapon) { m_cam.Frame(m_weapon->Center(), m_weapon->Radius() * 0.8f); m_cam.yaw = -1.2f; m_cam.pitch = 0.18f; }
                 else m_cam.Frame({ 0, 0, 0 }, ShapeRadius());
             }
             if (m_spin && !m_isAnim) m_cam.yaw += ImGui::GetIO().DeltaTime * m_spinSpeed * 0.8f;
             if (m_pitchOverride > -9) { m_cam.pitch = m_pitchOverride; m_pitchOverride = -10; }
             if (m_zoom > 0) { m_cam.distance *= m_zoom; m_cam.target.z += m_zoomUp; m_zoom = 0; }
             if (m_isAnim) AdvanceAnimation();
+            if (m_kind == Kind::Weapon && !m_isAnim) m_weapon->Pose(0, false);
+            m_cam.fov = m_orbitFovDeg * kPi / 180.0f;
+            if (m_kind == Kind::Weapon)
+            {
+                m_weapon->CollectBones(m_weaponBones);
+                Vec3 eye, dir, up;
+                if (m_fpv && m_weapon->CameraPose(eye, dir, up))
+                {
+                    m_cam.firstPerson = true; m_cam.fpEye = eye; m_cam.fpDir = dir; m_cam.fpUp = up;
+                    // the in-game field of view is horizontal
+                    m_cam.fov = 2.0f * std::atan(std::tan(m_fpvFovDeg * kPi / 360.0f) * (float)h / (float)std::max(w, 1));
+                }
+                else if (m_cam.firstPerson) { m_cam.firstPerson = false; m_frameRequested = true; }
+            }
+            else m_cam.firstPerson = false;
 
             std::vector<Renderer::DrawCall> calls;
             Mat4 world;
@@ -201,22 +237,24 @@ export namespace oa::ui
             {
                 if (auto* mesh = ShapeMesh()) calls.push_back({ mesh, 0, m_style });
             }
+            else if (m_kind == Kind::Weapon) m_weapon->Collect(calls);
             else if (m_model)
             {
                 for (size_t i = 0; i < m_model->submeshes.size(); ++i)
                     calls.push_back({ m_model.get(), i, i < m_subStyles.size() ? m_subStyles[i] : SurfaceStyle{} });
             }
             if (m_kind == Kind::Model && m_model && !m_modelData.Empty()) { m_cam.subjectCenter = m_modelData.Center(); m_cam.subjectRadius = m_modelData.Radius(); }
+            else if (m_kind == Kind::Weapon) { m_cam.subjectCenter = m_weapon->Center(); m_cam.subjectRadius = m_weapon->Radius() * 1.5f; }
             else { m_cam.subjectCenter = { 0, 0, 0 }; m_cam.subjectRadius = ShapeRadius(); }
             OverlayGeometry bones3d;
-            if (m_kind == Kind::Model && m_showBones && m_boneShapes) BuildBoneShapes(bones3d);
+            if ((m_kind == Kind::Model || m_kind == Kind::Weapon) && m_showBones && m_boneShapes) BuildBoneShapes(bones3d);
             m_renderer.RenderScene(m_target, m_cam, m_opt, calls, world, &bones3d);
 
             ImVec2 p = ImGui::GetCursorScreenPos();
             ImGui::Image((ImTextureID)(intptr_t)m_target.colorTex.Get(), avail);
             HandleViewInput();
             DrawContextMenu();
-            if (m_kind == Kind::Model && (m_showBones || m_showBoneNames)) DrawBones(p, avail);
+            if ((m_kind == Kind::Model || m_kind == Kind::Weapon) && (m_showBones || m_showBoneNames)) DrawBones(p, avail);
             if (m_rotatingLight)
             {
                 char lb[96];
@@ -270,6 +308,7 @@ export namespace oa::ui
             if (hover && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) m_panning = true;
             if (!io.MouseDown[0]) m_orbiting = false;
             if (!io.MouseDown[2]) m_panning = false;
+            if (m_fpv && m_kind == Kind::Weapon) { m_orbiting = false; m_panning = false; }
             if (m_orbiting)
             {
                 m_cam.yaw -= io.MouseDelta.x * 0.01f;
@@ -304,7 +343,7 @@ export namespace oa::ui
                 ImGui::Separator();
             }
             ImGui::MenuItem("Show info text", nullptr, &m_session.showPreviewInfo);
-            if (m_kind == Kind::Model && !m_modelData.bones.empty())
+            if ((m_kind == Kind::Model && !m_modelData.bones.empty()) || (m_kind == Kind::Weapon && !m_weaponBones.empty()))
             {
                 ImGui::MenuItem("Show bones", nullptr, &m_showBones);
                 ImGui::MenuItem("Show bone names", nullptr, &m_showBoneNames);
@@ -318,6 +357,17 @@ export namespace oa::ui
                 }
                 ImGui::Separator();
             }
+            if (m_cam.firstPerson)
+            {
+                ImGui::SetNextItemWidth(Theme::S(170));
+                ImGui::SliderFloat("Field of view", &m_fpvFovDeg, 40.0f, 120.0f, "%.0f deg");
+            }
+            else
+            {
+                ImGui::SetNextItemWidth(Theme::S(170));
+                ImGui::SliderFloat("Field of view", &m_orbitFovDeg, 15.0f, 100.0f, "%.0f deg");
+            }
+            ImGui::Separator();
             ImGui::MenuItem("Wireframe", nullptr, &m_opt.wireframe);
             ImGui::MenuItem("Floor grid", nullptr, &m_opt.grid);
             ImGui::MenuItem("Turntable", nullptr, &m_spin);
@@ -409,13 +459,15 @@ export namespace oa::ui
         std::string Signature(const gdt::Entry& e) const
         {
             std::string s = std::to_string((uintptr_t)&e) + "|" + std::to_string((int)EffectiveMode());
-            if (IEquals(e.GdfName(), "material.gdf"))
-                for (auto k : { "colorMap", "normalMap", "specColorMap", "detailMap", "colorTint", "tileColor", "blendFunc", "cullFace", "materialType",
-                                "envMapMin", "envMapMax", "envMapExponent" }) s += "|" + e.GetString(k);
-            else if (IEquals(e.GdfName(), "xmodel.gdf"))
-                s += "|" + e.GetString("filename") + "|" + std::to_string(m_session.project.Revision());
-            else if (IEquals(e.GdfName(), "xanim.gdf"))
-                s += "|" + e.GetString("filename") + "|" + e.GetString("model") + "|" + m_skelOverride;
+            // A hash over every stored key and value: whatever the user edits (alpha test, filtering, tiling, a map...)
+            // changes it, so the preview never shows a stale state.
+            uint64_t h = 1469598103934665603ull;
+            auto mix = [&](const std::string& t) { for (unsigned char c : t) { h ^= c; h *= 1099511628211ull; } h ^= 0xff; h *= 1099511628211ull; };
+            for (auto& kv : e.Values()) { mix(kv.first); mix(kv.second); }
+            s += "|" + std::to_string(h);
+            s += "|" + std::to_string(m_session.project.Revision());   // bumped by reloads, renames and deletes
+            if (false) {}
+            else if (IEquals(e.GdfName(), "xanim.gdf")) s += "|" + m_skelOverride;
             return s;
         }
 
@@ -423,12 +475,14 @@ export namespace oa::ui
         {
             const gdt::Entry* e = m_session.Selected();
             bool rawModel = !m_session.previewRawModel.empty(), rawMat = !m_session.previewRawMaterial.empty();
-            if (!e && !rawModel && !rawMat)
+            bool rawAnim = !m_session.previewRawAnim.empty();
+            if (!e && !rawModel && !rawMat && !rawAnim)
             {
                 m_kind = Kind::None; m_message.clear(); m_signature.clear();
                 return;
             }
-            std::string sig = rawModel ? "rawm|" + m_session.previewRawModel + "|" + std::to_string((int)EffectiveMode())
+            std::string sig = rawAnim ? "rawa|" + m_session.previewRawAnim + "|" + m_skelOverride + "|" + std::to_string((int)EffectiveMode())
+                            : rawModel ? "rawm|" + m_session.previewRawModel + "|" + std::to_string((int)EffectiveMode())
                             : rawMat ? "rawt|" + m_session.previewRawMaterial + "|" + std::to_string((int)EffectiveMode())
                             : Signature(*e);
             if (sig == m_signature) return;
@@ -437,6 +491,7 @@ export namespace oa::ui
             m_isAnim = false; m_posedMesh = MeshData{}; m_posedBones.clear();
             if (e != m_lastEntry) { m_skelOverride.clear(); m_lastEntry = e; }
 
+            if (rawAnim) { BuildRawAnim(m_session.previewRawAnim); m_frameRequested = true; return; }
             if (rawModel) { BuildRawModel(m_session.previewRawModel); m_frameRequested = true; return; }
             if (rawMat)
             {
@@ -451,6 +506,7 @@ export namespace oa::ui
             if (IEquals(e->GdfName(), "material.gdf")) { m_kind = Kind::Material; BuildMaterial(*e); m_frameRequested = true; }
             else if (IEquals(e->GdfName(), "xmodel.gdf")) { BuildModel(*e); m_frameRequested = true; }
             else if (IEquals(e->GdfName(), "xanim.gdf")) { BuildAnim(*e); m_frameRequested = true; }
+            else if (IsWeaponDef(e->GdfName())) { BuildWeapon(*e); m_frameRequested = true; }
             else
             {
                 m_kind = Kind::None;
@@ -467,14 +523,29 @@ export namespace oa::ui
             if (path.empty()) { m_kind = Kind::None; m_message = "Animation source not found:\n" + (rel.empty() ? std::string("(no filename set)") : rel) + "\n(expected under xanim_export/)"; return; }
             if (!Animation::LoadExport(path, m_anim, err)) { m_kind = Kind::None; m_message = path.filename().string() + ": " + err; return; }
             m_anim.name = e.Name();
+            ShowAnimation(e.GetString("model"));
+        }
 
+        // A compiled animation of the game files (raw/xanim), shown on the best matching skeleton.
+        void BuildRawAnim(const std::string& name)
+        {
+            std::string err;
+            if (!Animation::LoadCompiled(m_session.project.Root() / "raw" / "xanim" / name, m_anim, err))
+            { m_kind = Kind::None; m_message = "Cannot show compiled animation '" + name + "'\n" + err; return; }
+            m_anim.name = name;
+            ShowAnimation({});
+        }
+
+        void ShowAnimation(const std::string& declaredModel)
+        {
+            std::string err;
             // choose a skeleton: the one the asset names, else the best match by bone names
             auto& index = m_session.skeletons;
             m_candidates = index.Match(m_anim.parts);
             std::string modelName = m_skelOverride;
             if (modelName.empty())
             {
-                std::string declared = NormalizeSlashes(e.GetString("model"));
+                std::string declared = NormalizeSlashes(declaredModel);
                 if (!declared.empty())
                     for (auto& g : m_session.project.Gdts())
                         for (auto& x : g->Entries())
@@ -510,6 +581,7 @@ export namespace oa::ui
         void AdvanceAnimation()
         {
             if (!m_isAnim || m_anim.numFrames <= 0) return;
+            const bool weapon = m_kind == Kind::Weapon;
             float n = (float)m_anim.numFrames;
             if (m_playing)
             {
@@ -521,6 +593,7 @@ export namespace oa::ui
                 }
             }
             m_frame = std::clamp(m_frame, 0.0f, n - 1);
+            if (weapon) { m_weapon->Pose(m_frame, m_loop); return; }
             m_skinner.Pose(m_modelData, m_anim, m_frame, m_loop, m_posedBones);
             if (m_model && !m_modelData.skin.empty())
             {
@@ -570,6 +643,24 @@ export namespace oa::ui
                 ImGui::EndCombo();
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Playback speed");
+            if (!m_anim.notes.empty())
+            {
+                ImGui::SameLine(0, Theme::S(6));
+                if (ImGui::Button("Notes")) ImGui::OpenPopup("##notes");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Notetracks of this animation");
+                if (ImGui::BeginPopup("##notes"))
+                {
+                    ImGui::TextDisabled("%zu notetracks - click to jump", m_anim.notes.size());
+                    for (auto& n : m_anim.notes)
+                    {
+                        char b[200];
+                        std::snprintf(b, sizeof(b), "%4d   %s", n.frame, n.name.c_str());
+                        if (ImGui::Selectable(b, (int)m_frame == n.frame)) { m_frame = (float)std::clamp(n.frame, 0, last); m_playing = false; }
+                    }
+                    ImGui::EndPopup();
+                }
+            }
+            if (m_kind == Kind::Weapon) goto skip_skeleton;
             ImGui::SameLine(0, Theme::S(6));
             if (ImGui::Button("Skeleton...")) ImGui::OpenPopup("##skelpick");
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Model whose skeleton is used: %s", m_skeletonName.c_str());
@@ -584,12 +675,86 @@ export namespace oa::ui
                 }
                 ImGui::EndPopup();
             }
+            skip_skeleton:;
+        }
+
+        // ------------------------------------------------------------------ weapons
+        // Finds the animation for a weapon: an xanim asset of that name (its xanim_export source) first.
+        bool ResolveAnimation(const std::string& name, Animation& out, std::string& err)
+        {
+            if (auto* xe = m_session.project.FindEntry("xanim.gdf", name))
+            {
+                std::string rel = xe->GetString("filename");
+                auto path = rel.empty() ? fs::path{} : m_session.project.ResolveFile(rel, "xanim_export/");
+                if (!path.empty() && Animation::LoadExport(path, out, err)) { out.name = name; return true; }
+                if (err.empty()) err = "export file not found";
+            }
+            // not a GDT asset: the compiled animation of the game files
+            fs::path compiled = m_session.project.Root() / "raw" / "xanim" / name;
+            std::error_code ec;
+            if (fs::is_regular_file(compiled, ec)) { std::string cerr; if (Animation::LoadCompiled(compiled, out, cerr)) { out.name = name; err.clear(); return true; } err = cerr; return false; }
+            if (err.empty()) err = "no xanim asset or compiled animation named '" + name + "'";
+            return false;
+        }
+
+        void SelectWeaponAnim(const std::string& name)
+        {
+            if (name == "-" || name.empty())
+            {
+                m_isAnim = false; m_weapon->SetAnimation(nullptr, {}); m_weaponAnimError.clear();
+                return;
+            }
+            std::string err;
+            if (!ResolveAnimation(name, m_anim, err))
+            {
+                m_isAnim = false; m_weapon->SetAnimation(nullptr, {});
+                m_weaponAnimError = "Animation '" + name + "' cannot be shown: " + err;
+                return;
+            }
+            m_weaponAnimError.clear();
+            m_weapon->SetAnimation(&m_anim, name);
+            m_isAnim = true; m_frame = 0; m_playing = true;
+            m_weapon->Pose(0, m_loop);
+        }
+
+        void BuildWeapon(const gdt::Entry& e)
+        {
+            m_weapon->Load(e, EffectiveMode());
+            m_kind = Kind::Weapon;
+            m_weaponAnimError.clear();
+            for (auto& line : m_weapon->Overlay()) m_overlay.push_back(line);
+            // start on the idle animation when it can be shown
+            m_isAnim = false;
+            for (auto& a : m_weapon->Anims())
+                if (a.field == "idleAnim") { SelectWeaponAnim(a.name); break; }
+            if (!m_pendingWeaponAnim.empty())
+                for (auto& a : m_weapon->Anims())
+                    if (a.field == m_pendingWeaponAnim || a.name == m_pendingWeaponAnim) { SelectWeaponAnim(a.name); break; }
+            if (m_pendingFrame >= 0 && m_isAnim) { m_frame = (float)std::min(m_pendingFrame, m_anim.numFrames - 1); m_playing = false; }
+        }
+
+        void DrawWeaponControls()
+        {
+            bool modelsChanged = false;
+            std::string picked = m_weapon->DrawControls(modelsChanged);
+            ImGui::SameLine(0, Theme::S(6));
+            if (ImGui::Checkbox("HUD", &m_showHud)) {}
+            if (modelsChanged) m_frameRequested = true;
+            if (!picked.empty()) SelectWeaponAnim(picked);
+            if (auto* open = m_weapon->TakeOpenRequest()) m_session.Open(open);
+            if (!m_weaponAnimError.empty()) ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.4f, 1), "%s", m_weaponAnimError.c_str());
+        }
+
+        const std::vector<Bone>& ActiveBones() const
+        {
+            if (m_kind == Kind::Weapon) return m_weaponBones;
+            return m_isAnim ? m_posedBones : m_modelData.bones;
         }
 
         // Octahedral bone shapes (wide near the parent joint, tapering to the child), coloured by depth in the hierarchy.
         void BuildBoneShapes(OverlayGeometry& ov)
         {
-            const std::vector<Bone>& bones = m_isAnim ? m_posedBones : m_modelData.bones;
+            const std::vector<Bone>& bones = ActiveBones();
             ov.xray = m_boneXray;
             const Vec3 light = Vec3{ 0.35f, 0.45f, 0.82f }.Normalized();
             std::vector<int> depth(bones.size(), 0);
@@ -622,7 +787,8 @@ export namespace oa::ui
                 Vec3 d = axis * (1.0f / len);
                 Vec3 ref = std::fabs(d.z) < 0.9f ? Vec3{ 0, 0, 1 } : Vec3{ 1, 0, 0 };
                 Vec3 u = d.Cross(ref).Normalized(), v = d.Cross(u).Normalized();
-                float r = std::min(len * 0.14f, m_modelData.Radius() * 0.03f + 0.001f);
+                float subjectR = m_kind == Kind::Weapon ? m_weapon->Radius() : m_modelData.Radius();
+                float r = std::min(len * 0.14f, subjectR * 0.03f + 0.001f);
                 Vec3 ringC = head + d * (len * 0.18f);
                 Vec3 ring[4] = { ringC + u * r, ringC + v * r, ringC - u * r, ringC - v * r };
                 Vec3 base = hsv(std::fmod(0.58f + 0.42f * (float)depth[pi] / (float)maxDepth, 1.0f), 0.55f, 0.95f);
@@ -646,7 +812,7 @@ export namespace oa::ui
         // Projects the skeleton onto the 3D view: lines to the parents, joint dots, optional names.
         void DrawBones(ImVec2 origin, ImVec2 size)
         {
-            const std::vector<Bone>& bones = m_isAnim ? m_posedBones : m_modelData.bones;
+            const std::vector<Bone>& bones = ActiveBones();
             if (bones.empty()) return;
             Mat4 vp = m_cam.View() * m_cam.Proj(size.x / std::max(size.y, 1.0f));
             auto project = [&](const Vec3& p, ImVec2& out) {
@@ -852,12 +1018,19 @@ export namespace oa::ui
 
         // skeleton overlay
         float m_zoom = 0, m_zoomUp = 0, m_pitchOverride = -10;
+        std::unique_ptr<WeaponScene> m_weapon;
+        bool m_showHud = true;
+        std::string m_weaponAnimError;
         bool m_envInit = false, m_rotatingLight = false;
         int m_lightIndex = -1, m_presetIndex = -1;
         std::string m_skyName;
         std::vector<std::string> m_skyNames;
         std::map<std::string, std::shared_ptr<GpuCube>> m_skyCache;
         int m_pendingFrame = -1;
+        std::string m_pendingWeaponAnim;
+        bool m_fpv = false;
+        float m_fpvFovDeg = 90.0f, m_orbitFovDeg = 40.0f;
+        std::vector<Bone> m_weaponBones;
         bool m_showBones = false, m_showBoneNames = false, m_boneShapes = true, m_boneXray = true;
 
         // animation playback

@@ -165,6 +165,39 @@ export namespace oa
             r.style.additive = blend.rfind("Add", 0) == 0 || blend.rfind("Screen", 0) == 0;
             r.style.doubleSided = e.GetString("cullFace").rfind("None", 0) == 0;
             r.style.alphaTest = e.GetString("alphaTest").rfind("GE128", 0) == 0;
+            r.style.multiply = blend.rfind("Multiply", 0) == 0;
+            r.style.screen = blend.rfind("Screen", 0) == 0;
+            {
+                std::string dt = e.GetString("depthTest");
+                if (dt.rfind("Less", 0) == 0 && dt.rfind("LessEqual", 0) != 0) r.style.depthFunc = 2; // D3DCMP_LESS
+                else if (dt.rfind("Equal", 0) == 0) r.style.depthFunc = 3; // D3DCMP_EQUAL
+                else if (dt.rfind("Always", 0) == 0 || dt.rfind("Disable", 0) == 0) r.style.noDepthTest = true;
+                std::string dw = e.GetString("depthWrite");
+                r.style.depthWrite = dw.rfind("On", 0) == 0 ? 1 : dw.rfind("Off", 0) == 0 ? 0 : -1;
+                std::string po = e.GetString("polygonOffset");
+                r.style.polyOffset = po.rfind("Static", 0) == 0 ? 1 : po.rfind("Weapon", 0) == 0 ? 2 : 0;
+                unsigned mask = 0xF;
+                if (e.GetString("colorWriteRed").rfind("Disable", 0) == 0) mask &= ~1u;
+                if (e.GetString("colorWriteGreen").rfind("Disable", 0) == 0) mask &= ~2u;
+                if (e.GetString("colorWriteBlue").rfind("Disable", 0) == 0) mask &= ~4u;
+                if (e.GetString("colorWriteAlpha").rfind("Disable", 0) == 0) mask &= ~8u;
+                r.style.colorMask = mask;
+            }
+            {
+                // filterColor: "mip standard (2x bilinear)*" | "<auto filter>*" | "bilinear" | "trilinear" | "anisotropic",
+                // "mip expensive (4x bilinear)", "mip more expensive (2x trilinear)", "mip most expensive (4x trilinear)",
+                // "nomip nearest" | "nearest", "nomip bilinear" | "linear"   (the file may use any of the aliases)
+                using F = SurfaceStyle::Filter;
+                std::string f = ToLower(e.GetString("filterColor"));
+                if (!f.empty() && f.back() == '*') f.pop_back();
+                if (f.rfind("nomip nearest", 0) == 0 || f == "nearest") r.style.filter = F::NoMipNearest;
+                else if (f.rfind("nomip bilinear", 0) == 0 || f == "linear") r.style.filter = F::NoMipLinear;
+                else if (f.find("most expensive") != std::string::npos) r.style.filter = F::Trilinear4x;
+                else if (f.find("more expensive") != std::string::npos || f == "trilinear") r.style.filter = F::Trilinear2x;
+                else if (f.find("expensive") != std::string::npos) r.style.filter = F::Bilinear4x;
+                else if (f.rfind("mip standard", 0) == 0 || f == "bilinear" || f == "<auto filter>") r.style.filter = F::Standard;
+                else if (f == "anisotropic") r.style.filter = F::Trilinear4x;
+            }
             consts["colorTint"] = e.GetColor("colorTint");
             consts["envMapParms"] = { (float)e.GetNumber("envMapMin"), (float)e.GetNumber("envMapMax"), (float)e.GetNumber("envMapExponent"), 0 };
             consts["detailScale"] = { (float)e.GetNumber("detailScaleX"), (float)e.GetNumber("detailScaleY"), 0, 0 };

@@ -157,7 +157,7 @@ export namespace oa::ui
     {
         New, Open, Save, Undo, Redo, Back, Forward, Refresh, Star, StarFilled, Lock, Search, Bulb, Camera, Wire, Grid,
         Play, Pause, Prev, Next, Funnel, Copy, Sync, Table, Close, Folder, Plus, Minus,
-        Sphere, Cube, Cylinder, Cone, Torus, Plane, Pencil, Trash, Document, Bone, Tag, Loop, Info
+        Sphere, Cube, Cylinder, Cone, Torus, Plane, Pencil, Trash, Document, Bone, Tag, Loop, Info, Eye
     };
 
     // Small vector icons drawn with the draw list so no icon font / image assets are needed.
@@ -354,6 +354,11 @@ export namespace oa::ui
         case Icon::Loop:
             dl->PathArcTo(P(8, 8), 4.6f * u, 0.4f, 5.6f, 18); dl->PathStroke(col, th * 1.4f);
             dl->AddTriangleFilled(P(9.5f, 1.8f), P(13.2f, 5.6f), P(8.0f, 5.8f), col);
+            break;
+        case Icon::Eye:
+            dl->PathArcTo(P(8, 12.2f), 7.2f * u, -2.35f, -0.79f, 14); dl->PathStroke(col, th * 1.4f);
+            dl->PathArcTo(P(8, 3.8f), 7.2f * u, 0.79f, 2.35f, 14); dl->PathStroke(col, th * 1.4f);
+            dl->AddCircleFilled(P(8, 8), 2.4f * u, col);
             break;
         case Icon::Info:
             dl->AddCircleFilled(P(8, 8), 6.6f * u, col);

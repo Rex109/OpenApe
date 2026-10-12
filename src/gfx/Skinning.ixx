@@ -36,7 +36,8 @@ export namespace oa
 
         // World-space bone transforms at `frame`. The animation files store ABSOLUTE (model space) poses for every
         // part; bones the animation does not mention follow their parent with their bind-pose offset.
-        void Pose(const MeshData& model, const Animation& anim, float frame, bool loop, std::vector<Bone>& posed) const
+        // `rootParent` (optional) is the transform the model's root bones hang from, e.g. the weapon tag of a viewmodel's hands.
+        void Pose(const MeshData& model, const Animation& anim, float frame, bool loop, std::vector<Bone>& posed, const Bone* rootParent = nullptr, bool translationIsOffset = false) const
         {
             posed = model.bones;
             for (size_t b = 0; b < posed.size(); ++b)
@@ -44,7 +45,21 @@ export namespace oa
                 Bone& bn = posed[b];
                 AnimPose p;
                 if (b < m_partOfBone.size() && m_partOfBone[b] >= 0) p = anim.Sample(frame, (size_t)m_partOfBone[b], loop);
-                if (p.valid) { bn.worldPos = p.pos; bn.worldRot = p.rot; }
+                if (p.valid && anim.localPoses)
+                {
+                    // gun bones (clip, bolt...) store their translation as an offset from the bind pose, the hands store it absolute
+                    if (p.hasPos) bn.localPos = translationIsOffset ? bn.localPos + p.pos : p.pos;
+                    if (p.hasRot) bn.localRot = p.rot;
+                    if (bn.parent >= 0 && bn.parent < (int)b)
+                    {
+                        const Bone& par = posed[bn.parent];
+                        bn.worldPos = par.worldPos + par.worldRot.Rotate(bn.localPos);
+                        bn.worldRot = (par.worldRot * bn.localRot).Normalized();
+                    }
+                    else if (rootParent) { bn.worldPos = rootParent->worldPos + rootParent->worldRot.Rotate(bn.localPos); bn.worldRot = (rootParent->worldRot * bn.localRot).Normalized(); }
+                    else { bn.worldPos = bn.localPos; bn.worldRot = bn.localRot; }
+                }
+                else if (p.valid) { bn.worldPos = p.pos; bn.worldRot = p.rot; }
                 else if (bn.parent >= 0 && bn.parent < (int)b)
                 {
                     const Bone& par = posed[bn.parent];

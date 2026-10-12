@@ -187,7 +187,7 @@ export namespace oa
         // Preview override: show this image file instead of the selected asset.
         fs::path previewImage;
         // Preview a compiled asset from <root>/raw that has no GDT entry.
-        std::string previewRawModel, previewRawMaterial;
+        std::string previewRawModel, previewRawMaterial, previewRawAnim;
 
         // layout (persisted)
         float leftWidth = 0.30f, previewHeight = 0.34f, filtersHeight = 0.20f;
@@ -285,7 +285,7 @@ export namespace oa
             // selecting an asset shows it in the current tab; only an explicit request opens another one
             if (activeTab < 0 || activeTab >= (int)tabs.size()) NewTab();
             tabs[activeTab].entry = e;
-            previewImage.clear(); previewRawModel.clear(); previewRawMaterial.clear();
+            previewImage.clear(); previewRawModel.clear(); previewRawMaterial.clear(); previewRawAnim.clear();
         }
 
         void OpenInNewTab(gdt::Entry* e)
@@ -302,14 +302,14 @@ export namespace oa
         {
             tabs.push_back({ nullptr, ++m_tabCounter });
             activeTab = (int)tabs.size() - 1;
-            previewImage.clear(); previewRawModel.clear(); previewRawMaterial.clear();
+            previewImage.clear(); previewRawModel.clear(); previewRawMaterial.clear(); previewRawAnim.clear();
         }
 
         void SetActiveTab(int i)
         {
             if (i == activeTab || i < 0 || i >= (int)tabs.size()) return;
             activeTab = i;
-            previewImage.clear(); previewRawModel.clear(); previewRawMaterial.clear();
+            previewImage.clear(); previewRawModel.clear(); previewRawMaterial.clear(); previewRawAnim.clear();
         }
 
         void CloseTab(int i)

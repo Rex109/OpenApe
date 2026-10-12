@@ -68,7 +68,7 @@ export namespace oa
             WireCallbacks();
 
             for (int i = 1; i < argc; ++i)
-                if (std::string(argv[i]) == "--bones") m_preview->SetBones(false); else if (std::string(argv[i]) == "--names") m_preview->SetBones(true);
+                if (std::string(argv[i]) == "--fpv") m_preview->SetFirstPerson(true); else if (std::string(argv[i]) == "--bones") m_preview->SetBones(false); else if (std::string(argv[i]) == "--names") m_preview->SetBones(true);
             for (int i = 1; i + 1 < argc; ++i)
             {
                 std::string a = argv[i];
@@ -90,9 +90,11 @@ export namespace oa
                 else if (a == "--raw-model") m_shotRawModel = argv[i + 1];
                 else if (a == "--image") m_shotImage = argv[i + 1];
                 else if (a == "--raw-material") m_shotRawMat = argv[i + 1];
+                else if (a == "--raw-anim") m_shotRawAnim = argv[i + 1];
+                else if (a == "--weapon-anim") m_preview->SetWeaponAnim(argv[i + 1]);
             }
             OpenInitialProject(argc, argv, exeDir);
-            m_session.previewRawModel = m_shotRawModel; m_session.previewRawMaterial = m_shotRawMat; m_session.previewImage = m_shotImage;
+            m_session.previewRawModel = m_shotRawModel; m_session.previewRawMaterial = m_shotRawMat; m_session.previewRawAnim = m_shotRawAnim; m_session.previewImage = m_shotImage;
             if (!m_shotSelect.empty())
                 for (auto& g : m_session.project.Gdts())
                     if (auto* e = g->Find(m_shotSelect)) { m_session.Open(e); break; }
@@ -432,7 +434,7 @@ export namespace oa
         {
             if (m_rawLists.empty())
             {
-                for (auto sub : { "xmodel", "materials" })
+                for (auto sub : { "xmodel", "materials", "xanim" })
                 {
                     std::vector<std::string> names;
                     std::error_code ec;
@@ -444,8 +446,8 @@ export namespace oa
             }
             if (ImGui::BeginTabBar("##rawtabs"))
             {
-                const char* tabs[] = { "Models", "Materials" };
-                for (int t = 0; t < 2; ++t)
+                const char* tabs[] = { "Models", "Materials", "Animations" };
+                for (int t = 0; t < 3; ++t)
                     if (ImGui::BeginTabItem(tabs[t])) { m_rawTab = t; ImGui::EndTabItem(); }
                 ImGui::EndTabBar();
             }
@@ -465,8 +467,8 @@ export namespace oa
                         const std::string& n = *shown[i];
                         if (ImGui::Selectable(n.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick))
                         {
-                            m_session.previewRawModel.clear(); m_session.previewRawMaterial.clear(); m_session.previewImage.clear();
-                            (m_rawTab == 0 ? m_session.previewRawModel : m_session.previewRawMaterial) = n;
+                            m_session.previewRawModel.clear(); m_session.previewRawMaterial.clear(); m_session.previewRawAnim.clear(); m_session.previewImage.clear();
+                            (m_rawTab == 0 ? m_session.previewRawModel : m_rawTab == 1 ? m_session.previewRawMaterial : m_session.previewRawAnim) = n;
                             if (ImGui::IsMouseDoubleClicked(0)) { ImGui::CloseCurrentPopup(); m_modal = Modal::None; }
                         }
                     }
@@ -929,7 +931,7 @@ export namespace oa
         std::unique_ptr<ui::AssetsPanel> m_assets;
         std::unique_ptr<ui::FiltersPanel> m_filters;
 
-        std::string m_shotPath, m_shotSelect, m_shotShape, m_shotRawModel, m_shotRawMat, m_shotImage;
+        std::string m_shotPath, m_shotSelect, m_shotShape, m_shotRawModel, m_shotRawMat, m_shotRawAnim, m_shotImage;
         int m_frameCount = 0, m_testClickX = -1, m_testClickY = -1;
         std::string m_testEdit, m_testLog;
         std::string m_propFilter, m_rawFilter;
