@@ -27,7 +27,7 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Generate the Visual Studio project
-        run: tools\premake5.exe vs2022
+        run: tools\premake5.exe vs2026
 
       - name: Build
         run: msbuild build\openape.vcxproj /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} /m /v:minimal /nologo
