@@ -1,0 +1,4 @@
+#include <winuser.h>
+
+/* The first icon in the resource list is the one Explorer shows for the exe */
+IDI_ICON1 ICON "icon.ico"

@@ -1,0 +1,14 @@
+build/
+bin/
+obj/
+*.obj
+*.exe
+!tools/premake5.exe
+*.pdb
+*.ilk
+*.log
+*.user
+openape.ini
+imgui.ini
+openape.cfg
+selftest.log
