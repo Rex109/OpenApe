@@ -1,0 +1,42 @@
+name: Build
+
+# Builds Debug and Release for x64 and Win32 on every push and pull request, and keeps the executables as artifacts.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.platform }} ${{ matrix.configuration }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, Win32]
+        configuration: [Debug, Release]
+
+    steps:
+      - name: Check out (with the imgui and stb submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0          # the title bar shows the commit hash
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Generate the Visual Studio project
+        run: tools\premake5.exe vs2022
+
+      - name: Build
+        run: msbuild build\openape.vcxproj /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} /m /v:minimal /nologo
+
+      - name: Upload the executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: openape-${{ matrix.platform }}-${{ matrix.configuration }}
+          path: |
+            bin/${{ matrix.platform }}/openape.exe
+            bin/${{ matrix.platform }}/openape.pdb
+          if-no-files-found: error
