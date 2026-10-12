@@ -170,17 +170,26 @@ export namespace oa
             return m_gdts.back().get();
         }
 
-        // Runs bin\<name>.bat (or .exe) like asset_manager.exe does for its convert commands.
+        // Runs a convert tool like asset_manager.exe does: it calls bin\AssetManager\<name>.bat, then the .exe of that name
+        // (name is e.g. "pcConvertSingle"; the single variants get "<gdt>" "<asset>" as arguments). Trees that keep their tools
+        // in bin\CoD4CompileTools are searched too, where "pcConvert" is cod4compiletools_convert.bat (it takes the bin folder).
         // Returns an error message, empty on success.
         std::string RunTool(const std::string& name, const std::string& args) const
         {
             fs::path bin = m_root / "bin";
-            for (auto ext : { ".bat", ".exe" })
+            struct Candidate { fs::path path; std::string args; };
+            std::vector<Candidate> candidates;
+            for (auto dir : { bin / "AssetManager", bin / "CoD4CompileTools", bin })
+                for (auto ext : { ".bat", ".exe" })
+                    candidates.push_back({ dir / (name + ext), args });
+            if (name == "pcConvert")
+                candidates.push_back({ bin / "CoD4CompileTools" / "cod4compiletools_convert.bat", "\"" + bin.string() + "\"" });
+            std::string tried;
+            for (auto& c : candidates)
             {
-                fs::path exe = bin / (name + ext);
                 std::error_code ec;
-                if (!fs::exists(exe, ec)) continue;
-                std::string cmd = "\"" + exe.string() + "\" " + args;
+                if (!fs::exists(c.path, ec)) { tried += "\n  " + c.path.string(); continue; }
+                std::string cmd = "\"" + c.path.string() + "\" " + c.args;
                 STARTUPINFOA si{}; si.cb = sizeof(si);
                 PROCESS_INFORMATION pi{};
                 std::string dir = bin.string();
@@ -189,9 +198,9 @@ export namespace oa
                     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
                     return {};
                 }
-                return "CreateProcess failed for " + exe.string();
+                return "CreateProcess failed for " + c.path.string();
             }
-            return "Neither " + (bin / (name + ".bat")).string() + " nor " + (bin / (name + ".exe")).string() + " exists";
+            return "Could not find the convert tool '" + name + "'. Looked for:" + tried;
         }
 
     private:

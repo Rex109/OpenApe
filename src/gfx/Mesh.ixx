@@ -9,6 +9,7 @@ module;
 #include <cstring>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 export module openape.mesh;
@@ -317,6 +318,7 @@ export namespace oa
             struct Corner { int v; Vec3 n; float u = 0, vv = 0; };
             Corner corner[3];
             std::vector<std::vector<uint32_t>> perMaterial;
+            std::unordered_map<std::string, uint32_t> weld;
             int expectedVerts = 0, curBone = -1;
             bool haveSkin = false;
 
@@ -339,7 +341,16 @@ export namespace oa
                 for (int k = 0; k < 3; ++k)
                 {
                     auto& c = corner[k];
+                    // Corners that agree on vertex, normal and UV are one vertex (as in the compiled model). Without this
+                    // every triangle has private vertices and the tangent frames, which are averaged per vertex, come out
+                    // faceted: normal-mapped surfaces then show the triangles.
+                    uint32_t keyBits[6];
+                    std::memcpy(&keyBits[0], &c.n.x, 4); std::memcpy(&keyBits[1], &c.n.y, 4); std::memcpy(&keyBits[2], &c.n.z, 4);
+                    std::memcpy(&keyBits[3], &c.u, 4); std::memcpy(&keyBits[4], &c.vv, 4); keyBits[5] = (uint32_t)c.v;
+                    std::string key((const char*)keyBits, sizeof(keyBits));
+                    if (auto hit = weld.find(key); hit != weld.end()) { perMaterial[curFaceMat].push_back(hit->second); continue; }
                     uint32_t idx = (uint32_t)out.vertices.size();
+                    weld.emplace(std::move(key), idx);
                     Vec3 p = verts[c.v].pos;
                     Vertex vx{}; vx.x = p.x; vx.y = p.y; vx.z = p.z; vx.nx = c.n.x; vx.ny = c.n.y; vx.nz = c.n.z; vx.u = c.u; vx.v = c.vv;
                     out.vertices.push_back(vx);
