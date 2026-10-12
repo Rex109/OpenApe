@@ -1,4 +1,8 @@
 module;
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <utility>
 
 #include <algorithm>
 #include <filesystem>

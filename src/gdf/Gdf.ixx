@@ -1,4 +1,7 @@
 module;
+#include <cctype>
+#include <filesystem>
+#include <utility>
 
 #include <array>
 #include <cmath>

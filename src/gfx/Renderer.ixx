@@ -1,4 +1,6 @@
 module;
+#include <cstdio>
+#include <cstdlib>
 
 #include <algorithm>
 #include <array>

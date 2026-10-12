@@ -1,4 +1,7 @@
 module;
+#include <cctype>
+#include <cstdio>
+#include <utility>
 
 #include <array>
 #include <cstdint>
