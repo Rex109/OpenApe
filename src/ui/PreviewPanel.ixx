@@ -51,6 +51,7 @@ export namespace oa::ui
         void SetZoom(float z) { m_zoom = z; }
         void SetLookUp(float u) { m_zoomUp = u; }
         void SetPitch(float p) { m_pitchOverride = p; }
+        void SetYaw(float y) { m_yawOverride = y; }
         void SetFrame(int f) { m_pendingFrame = f; }
         void SetWeaponAnim(const std::string& n) { m_pendingWeaponAnim = n; }
         void SetFirstPerson(bool on) { m_fpv = on; }
@@ -225,6 +226,7 @@ export namespace oa::ui
             }
             if (m_spin && !m_isAnim) m_cam.yaw += ImGui::GetIO().DeltaTime * m_spinSpeed * 0.8f;
             if (m_pitchOverride > -9) { m_cam.pitch = m_pitchOverride; m_pitchOverride = -10; }
+            if (m_yawOverride > -90) { m_cam.yaw = m_yawOverride; m_yawOverride = -100; }
             if (m_zoom > 0) { m_cam.distance *= m_zoom; m_cam.target.z += m_zoomUp; m_zoom = 0; }
             if (m_isAnim) AdvanceAnimation();
             if (m_kind == Kind::Weapon && !m_isAnim) m_weapon->Pose(0, false);
@@ -395,6 +397,10 @@ export namespace oa::ui
                 ImGui::SetNextItemWidth(Theme::S(170));
                 ImGui::SliderFloat("Field of view", &m_orbitFovDeg, 15.0f, 100.0f, "%.0f deg");
             }
+            if (ImGui::MenuItem("Reset field of view"))
+            {
+                if (m_cam.firstPerson) m_fpvFovDeg = 90.0f; else m_orbitFovDeg = 40.0f;
+            }
             ImGui::Separator();
             ImGui::MenuItem("Wireframe", nullptr, &m_opt.wireframe);
             ImGui::MenuItem("Floor grid", nullptr, &m_opt.grid);
@@ -554,6 +560,16 @@ export namespace oa::ui
                             : Signature(*e);
             if (sig == m_signature) return;
             m_signature = sig;
+            // Rebuilding for a changed setting (lighting, sky, a material option...) keeps the camera where the user put it;
+            // only showing another asset frames the view again.
+            {
+                std::string subject = rawAnim ? "a:" + m_session.previewRawAnim : rawModel ? "m:" + m_session.previewRawModel
+                                    : rawMat ? "t:" + m_session.previewRawMaterial : e ? e->GdfName() + "/" + e->Name() : std::string();
+                m_keepCamera = subject == m_cameraSubject;
+                m_cameraSubject = subject;
+                m_frameBefore = m_frameRequested;
+            }
+            struct KeepCamera { PreviewPanel& p; ~KeepCamera() { if (p.m_keepCamera) p.m_frameRequested = p.m_frameBefore; } } keepCamera{ *this };
             m_overlay.clear(); m_message.clear(); m_model.reset(); m_subStyles.clear(); m_modelData = MeshData{};
             m_isAnim = false; m_posedMesh = MeshData{}; m_posedBones.clear();
             if (e != m_lastEntry) { m_skelOverride.clear(); m_lastEntry = e; }
@@ -806,7 +822,6 @@ export namespace oa::ui
             std::string picked = m_weapon->DrawControls(modelsChanged);
             ImGui::SameLine(0, Theme::S(6));
             if (ImGui::Checkbox("HUD", &m_showHud)) {}
-            if (modelsChanged) m_frameRequested = true;
             if (!picked.empty()) SelectWeaponAnim(picked);
             if (auto* open = m_weapon->TakeOpenRequest()) m_session.Open(open);
             if (!m_weaponAnimError.empty()) ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.4f, 1), "%s", m_weaponAnimError.c_str());
@@ -1054,6 +1069,13 @@ export namespace oa::ui
         void BuildRawModel(const std::string& name)
         {
             std::string err;
+            // a path to an XMODEL_EXPORT file (used by the test command line) is loaded directly
+            if (ToLower(fs::path(name).extension().string()) == ".xmodel_export")
+            {
+                if (!XModelExportLoader::Load(name, m_modelData, err)) { m_kind = Kind::None; m_message = "Cannot read '" + name + "'\n" + err; return; }
+                FinishModel(fs::path(name).filename().string());
+                return;
+            }
             SetCompiledLods(m_session.project.Root() / "raw", name);
             if (!CompiledXModel::Load(m_session.project.Root() / "raw", name, m_lod, m_modelData, err))
             {
@@ -1127,12 +1149,15 @@ export namespace oa::ui
         std::map<std::string, std::shared_ptr<GpuCube>> m_skyCache;
         int m_pendingFrame = -1;
         int m_lod = 0;
+        std::string m_cameraSubject;
+        bool m_keepCamera = false, m_frameBefore = false;
         std::string m_lodKey;
         std::vector<std::string> m_lodLabels;
         MeshData m_shapeBase[7];
         bool m_shapeUvDirty[7] = {};
         std::string m_pendingWeaponAnim;
         bool m_fpv = false;
+        float m_yawOverride = -100.0f;
         float m_fpvFovDeg = 90.0f, m_orbitFovDeg = 40.0f;
         std::vector<Bone> m_weaponBones;
         bool m_showBones = false, m_showBoneNames = false, m_boneShapes = true, m_boneXray = true;

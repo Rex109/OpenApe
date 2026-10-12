@@ -86,6 +86,7 @@ export namespace oa
                 else if (a == "--light") m_preview->SetLight(std::atoi(argv[i + 1]));
                 else if (a == "--lookup") m_preview->SetLookUp((float)std::atof(argv[i + 1]));
                 else if (a == "--pitch") m_preview->SetPitch((float)std::atof(argv[i + 1]));
+                else if (a == "--yaw") m_preview->SetYaw((float)std::atof(argv[i + 1]));
                 else if (a == "--preset") m_preview->SetPreset(std::atoi(argv[i + 1]));
                 else if (a == "--sky") m_preview->SetSky(argv[i + 1]);
                 else if (a == "--theme") { m_session.accentTheme = std::atoi(argv[i + 1]); ui::Theme::SetAccent(m_session.accentTheme); }
@@ -98,6 +99,9 @@ export namespace oa
                 else if (a == "--raw-material") m_shotRawMat = argv[i + 1];
                 else if (a == "--raw-anim") m_shotRawAnim = argv[i + 1];
                 else if (a == "--then") m_testThen = argv[i + 1];
+                else if (a == "--run-convert") m_testConvert = argv[i + 1];
+                else if (a == "--rename") m_testRename = argv[i + 1];
+                else if (a == "--reload-at") m_testReloadAt = std::atoi(argv[i + 1]);
                 else if (a == "--weapon-anim") m_preview->SetWeaponAnim(argv[i + 1]);
             }
             OpenInitialProject(argc, argv, exeDir);
@@ -239,7 +243,11 @@ export namespace oa
             if (m_session.OpenRoot(root)) AfterProjectLoad();
         }
 
-        void ReloadAll()
+        // Reloading recreates every entry. Buttons that ask for it run in the middle of a frame, while the panels still hold
+        // pointers to the old entries, so the work is done at the start of the next frame instead.
+        void ReloadAll() { m_reloadPending = true; }
+
+        void DoReloadAll()
         {
             int skipped = 0;
             auto nav = m_session.SnapshotNav();
@@ -281,7 +289,10 @@ export namespace oa
                 if (!e) { Message("No asset selected"); return; }
                 auto err = e->Owner()->Dirty() ? e->Owner()->Save() : std::string();
                 if (!err.empty()) { Message(err); return; }
-                args = "\"" + e->Owner()->Path().string() + "\" \"" + e->Name() + "\"";
+                // asset_manager.exe passes the asset's type name and its name: ` "<type>" "<name>"`
+                std::string type = e->GdfName();
+                if (EndsWith(ToLower(type), ".gdf")) type.resize(type.size() - 4);
+                args = "\"" + type + "\" \"" + e->Name() + "\"";
             }
             else
             {
@@ -464,7 +475,7 @@ export namespace oa
         {
             if (m_rawLists.empty())
             {
-                for (auto sub : { "xmodel", "materials", "xanim" })
+                for (auto sub : { "xmodel", "materials", "xanim", "images" })
                 {
                     std::vector<std::string> names;
                     std::error_code ec;
@@ -476,8 +487,8 @@ export namespace oa
             }
             if (ImGui::BeginTabBar("##rawtabs"))
             {
-                const char* tabs[] = { "Models", "Materials", "Animations" };
-                for (int t = 0; t < 3; ++t)
+                const char* tabs[] = { "Models", "Materials", "Animations", "Images" };
+                for (int t = 0; t < 4; ++t)
                     if (ImGui::BeginTabItem(tabs[t])) { m_rawTab = t; ImGui::EndTabItem(); }
                 ImGui::EndTabBar();
             }
@@ -498,7 +509,8 @@ export namespace oa
                         if (ImGui::Selectable(n.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick))
                         {
                             m_session.previewRawModel.clear(); m_session.previewRawMaterial.clear(); m_session.previewRawAnim.clear(); m_session.previewImage.clear();
-                            (m_rawTab == 0 ? m_session.previewRawModel : m_rawTab == 1 ? m_session.previewRawMaterial : m_session.previewRawAnim) = n;
+                            if (m_rawTab == 3) m_session.previewImage = m_session.project.Root() / "raw" / "images" / n;
+                            else (m_rawTab == 0 ? m_session.previewRawModel : m_rawTab == 1 ? m_session.previewRawMaterial : m_session.previewRawAnim) = n;
                             if (ImGui::IsMouseDoubleClicked(0)) { ImGui::CloseCurrentPopup(); m_modal = Modal::None; }
                         }
                     }
@@ -527,6 +539,7 @@ export namespace oa
             auto reset = [this] { ImGui_ImplDX9_CreateDeviceObjects(); m_preview->OnDeviceReset(); };
             if (!m_renderer.EnsureDevice(m_width, m_height, lost, reset)) return;
 
+            if (m_reloadPending) { m_reloadPending = false; DoReloadAll(); }
             ImGui_ImplDX9_NewFrame();
             ImGui_ImplWin32_NewFrame();
             TestHooks();
@@ -548,7 +561,7 @@ export namespace oa
                 ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
                 dev->EndScene();
             }
-            if (!m_shotPath.empty() && ++m_frameCount == 12)
+            if (!m_shotPath.empty() && ++m_frameCount == (m_testReloadAt > 0 ? m_testReloadAt + 40 : 12))
             {
                 m_renderer.SaveBackBuffer(m_shotPath);
                 m_quit = true;
@@ -569,6 +582,14 @@ export namespace oa
                     size_t eq = m_testEdit.find('=');
                     m_session.SetValue(*e, m_testEdit.substr(0, eq), m_testEdit.substr(eq + 1));
                 }
+            if (m_testReloadAt > 0 && f == m_testReloadAt - 1 && !m_testRename.empty())
+            {
+                size_t bar = m_testRename.find('|');   // "old|new": simulates adding or removing a source file while the app runs
+                std::error_code ec;
+                fs::rename(m_testRename.substr(0, bar), m_testRename.substr(bar + 1), ec);
+            }
+            if (f == 5 && !m_testConvert.empty()) RunConvert(m_testConvert.c_str(), m_testConvert.find("Single") != std::string::npos);
+            if (m_testReloadAt > 0 && f == m_testReloadAt) ReloadAll();
             if (f == 3 && !m_testThen.empty())
                 for (auto& g : m_session.project.Gdts())
                     if (auto* e = g->Find(m_testThen)) { m_session.Open(e); break; }
@@ -646,19 +667,11 @@ export namespace oa
                 if (ImGui::MenuItem("Save All", "Ctrl+Shift+S", false, m_session.project.AnyDirty())) SaveAll();
                 if (ImGui::MenuItem("Reload From Disk")) ReloadAll();
                 ImGui::Separator();
-                if (ImGui::MenuItem("Preview Image File..."))
-                {
-                    fs::path p = platform::PickFile(m_hwnd, m_session.project.Root(), "Images\0*.tga;*.dds;*.png;*.jpg;*.bmp\0All files\0*.*\0", "Preview image");
-                    if (!p.empty()) m_session.previewImage = p;
-                }
                 if (ImGui::MenuItem("Preview Compiled Asset...", nullptr, false, m_session.project.IsOpen())) { m_rawLists.clear(); m_modal = Modal::Compiled; m_modalOpen = true; }
                 if (ImGui::BeginMenu("Convert"))
                 {
                     if (ImGui::MenuItem("PC - all")) RunConvert("pcConvert", false);
                     if (ImGui::MenuItem("PC - selected asset", nullptr, false, sel != nullptr)) RunConvert("pcConvertSingle", true);
-                    ImGui::Separator();
-                    if (ImGui::MenuItem("Xenon - all")) RunConvert("xenonConvert", false);
-                    if (ImGui::MenuItem("Xenon - selected asset", nullptr, false, sel != nullptr)) RunConvert("xenonConvertSingle", true);
                     ImGui::EndMenu();
                 }
                 ImGui::Separator();
@@ -999,6 +1012,10 @@ export namespace oa
         std::string m_shotPath, m_shotSelect, m_shotShape, m_shotRawModel, m_shotRawMat, m_shotRawAnim, m_shotImage;
         int m_frameCount = 0, m_testClickX = -1, m_testClickY = -1;
         std::string m_testEdit, m_testLog, m_testThen;
+        int m_testReloadAt = 0;
+        std::string m_testConvert;
+        bool m_reloadPending = false;
+        std::string m_testRename;
         std::string m_propFilter, m_rawFilter;
         std::vector<std::vector<std::string>> m_rawLists;
         int m_rawTab = 0;
