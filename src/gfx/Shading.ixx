@@ -145,7 +145,7 @@ export namespace oa
 
             // The GDT is what the user is editing: its material type and maps decide the techset, so changing them changes the
             // preview. The compiled material (which may be out of date) is only used when the GDT does not name a known techset.
-            std::string fromGdt = gdt ? TechsetForGdt(*gdt) : std::string();
+            std::string fromGdt = gdt ? TechsetForGdt(*gdt, &r.notes) : std::string();
             std::string techset = !fromGdt.empty() ? fromGdt : cm ? cm->techset : GuessTechset(gdt);
             r.techset = techset;
             bool sm_additive = false;
@@ -167,6 +167,13 @@ export namespace oa
             }
             // water has its own sun-lit technique (there is no editor "sunlight preview" for it)
             if (techset == "water" || techset == "w_water") { wanted = { "lit sun", "unlit", "fakelight normal" }; techName = wanted.front(); }
+            // Texture scroll lives in the game's scroll techset: its "unlit" technique runs a vertex shader that moves the texture
+            // coordinates by gameTime. The editor's own "sunlight preview" of that techset does not scroll, so use "unlit".
+            if (gdt && TexScrollApplies(*gdt) && techset.find("scroll") != std::string::npos)
+            {
+                wanted = { "unlit", "fakelight normal" }; techName = wanted.front();
+                r.notes.push_back("texture scroll: shown with the game's scroll shader (unlit technique, scrolling by game time)");
+            }
             // unlit and effect techsets have no lighting to preview: their own unlit technique is the material
             if (techset.find("unlit") != std::string::npos || techset.rfind("effect", 0) == 0) { wanted = { "unlit", "fakelight normal" }; techName = wanted.front(); }
             // A material whose in-game lit and unlit techniques are one and the same shader (a custom effect that ignores the
@@ -240,6 +247,7 @@ export namespace oa
                 }
                 sm->passes.push_back(std::move(sp));
             }
+            r.style.scroll = false;   // the shader scrolls the texture itself
             r.style.shader = std::move(sm);
             return r;
         }
@@ -289,7 +297,14 @@ export namespace oa
         // The techset the game's material tool picks for a GDT material, derived from the compiled materials of the stock
         // tree: "l_sm_" + r/b/a/t (replace, blend, add, alpha test) + "c0" + d0 n0 s0 for the detail / normal / specular maps,
         // "unlit", "2d", "effect", "sky", and a custom material's customString. Empty when no such techset exists.
-        std::string TechsetForGdt(const gdt::Entry& e) const
+        // The Texture Scroll checkbox exists only for "model phong" materials that are not additive (material.gdf); a stored
+        // value on any other material is stale and has no effect.
+        static bool TexScrollApplies(const gdt::Entry& e)
+        {
+            return e.GetInt("texScroll") != 0 && ToLower(e.GetString("materialType")) == "model phong" && e.GetString("blendFunc").rfind("Add", 0) != 0;
+        }
+
+        std::string TechsetForGdt(const gdt::Entry& e, std::vector<std::string>* notes = nullptr) const
         {
             std::string type = ToLower(e.GetString("materialType"));
             auto first = [&](const std::vector<std::string>& names) {
@@ -298,8 +313,17 @@ export namespace oa
             };
             if (type == "custom")
             {
-                std::string cs = e.GetString("customString");
-                return !cs.empty() && m_game.TechsetExists(cs) ? cs : std::string();
+                // a custom material's techset is named by its custom string (or, when that is empty, by the template); the
+                // template itself only matters when the shader is generated, which needs the compile tools
+                std::string cs = e.GetString("customString"), tmpl = e.GetString("customTemplate");
+                if (!cs.empty() && m_game.TechsetExists(cs)) return cs;
+                if (cs.empty() && !tmpl.empty() && m_game.TechsetExists(tmpl)) return tmpl;
+                // not compiled (yet): a stock techset of the kind the template makes, so the preview still follows the edit
+                std::string lt = ToLower(tmpl);
+                std::string stock = lt.find("2d") != std::string::npos ? "2d" : lt.find("sky") != std::string::npos ? "sky" : "l_sm_r0c0";
+                if (notes)
+                    notes->push_back("custom techset '" + (cs.empty() ? tmpl : cs) + "' not found in raw/techsets (not compiled yet?) - showing the stock '" + stock + "'");
+                return first({ stock });
             }
             if (type == "2d") return first({ "2d" });
             if (type == "effect") return first({ "effect" });
@@ -329,7 +353,7 @@ export namespace oa
                 std::vector<std::string> names;
                 for (const char* pre : { "l_sm_scroll_", "l_sm_" })
                 {
-                    if (pre[5] == 's' && e.GetInt("texScroll") == 0) continue;   // the scrolling variants only for texScroll
+                    if (pre[5] == 's' && !TexScrollApplies(e)) continue;   // the scrolling variants only when texScroll applies
                     std::string d = det ? "d0" : "", n = nrm ? "n0" : "", s = spc ? "s0" : "";
                     names.push_back(pre + base + d + n + s);
                     names.push_back(pre + base + d + n);
@@ -378,7 +402,7 @@ export namespace oa
                 double ss = e.GetNumber("specColorStrength"), cs = e.GetNumber("cosinePowerStrength");
                 r.style.specStrength = ss > 0 ? (float)std::clamp(ss / 100.0, 0.1, 1.0) : 1.0f;
                 r.style.powerStrength = cs > 0 ? (float)std::clamp(cs / 100.0, 0.1, 1.0) : 1.0f;
-                r.style.scroll = e.GetInt("texScroll") != 0;
+                r.style.scroll = TexScrollApplies(e);
                 r.style.atlasRows = std::clamp(e.GetInt("textureAtlasRowCount"), 1, 64);
                 r.style.atlasCols = std::clamp(e.GetInt("textureAtlasColumnCount"), 1, 64);
                 if (e.GetInt("nopicmipColor") || e.GetInt("nopicmipDetail") || e.GetInt("nopicmipNormal") || e.GetInt("nopicmipSpecular"))
