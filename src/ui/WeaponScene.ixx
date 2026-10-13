@@ -459,6 +459,7 @@ export namespace oa::ui
             {
                 gdt::Entry* mat = m_session.project.FindEntry("material.gdf", sm.material);
                 p.styles.push_back(m_shading.Build(sm.material, mat, mode).style);
+                p.styles.back().vertexColor = true;
             }
         }
 

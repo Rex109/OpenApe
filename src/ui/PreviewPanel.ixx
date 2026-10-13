@@ -1159,6 +1159,7 @@ export namespace oa::ui
             {
                 gdt::Entry* mat = m_session.project.FindEntry("material.gdf", sm.material);
                 m_subStyles.push_back(StyleFor(sm.material, mat, notes));
+                m_subStyles.back().vertexColor = true;
             }
             m_overlay.push_back(source + ": " + std::to_string(m_modelData.vertices.size()) + " verts, " + std::to_string(m_modelData.TriangleCount()) +
                                 " tris, " + std::to_string(m_modelData.submeshes.size()) + " surfaces, " + std::to_string(m_modelData.boneCount) + " bones");

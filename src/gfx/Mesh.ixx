@@ -315,7 +315,7 @@ export namespace oa
             std::string line;
             bool inVerts = false, inFaces = false;
             int curVert = -1, faceCorner = 0, curFaceMat = 0;
-            struct Corner { int v; Vec3 n; float u = 0, vv = 0; };
+            struct Corner { int v; Vec3 n; float u = 0, vv = 0; uint32_t col = 0xffffffffu; };
             Corner corner[3];
             std::vector<std::vector<uint32_t>> perMaterial;
             std::unordered_map<std::string, uint32_t> weld;
@@ -344,15 +344,15 @@ export namespace oa
                     // Corners that agree on vertex, normal and UV are one vertex (as in the compiled model). Without this
                     // every triangle has private vertices and the tangent frames, which are averaged per vertex, come out
                     // faceted: normal-mapped surfaces then show the triangles.
-                    uint32_t keyBits[6];
+                    uint32_t keyBits[7];
                     std::memcpy(&keyBits[0], &c.n.x, 4); std::memcpy(&keyBits[1], &c.n.y, 4); std::memcpy(&keyBits[2], &c.n.z, 4);
-                    std::memcpy(&keyBits[3], &c.u, 4); std::memcpy(&keyBits[4], &c.vv, 4); keyBits[5] = (uint32_t)c.v;
+                    std::memcpy(&keyBits[3], &c.u, 4); std::memcpy(&keyBits[4], &c.vv, 4); keyBits[5] = (uint32_t)c.v; keyBits[6] = c.col;
                     std::string key((const char*)keyBits, sizeof(keyBits));
                     if (auto hit = weld.find(key); hit != weld.end()) { perMaterial[curFaceMat].push_back(hit->second); continue; }
                     uint32_t idx = (uint32_t)out.vertices.size();
                     weld.emplace(std::move(key), idx);
                     Vec3 p = verts[c.v].pos;
-                    Vertex vx{}; vx.x = p.x; vx.y = p.y; vx.z = p.z; vx.nx = c.n.x; vx.ny = c.n.y; vx.nz = c.n.z; vx.u = c.u; vx.v = c.vv;
+                    Vertex vx{}; vx.x = p.x; vx.y = p.y; vx.z = p.z; vx.nx = c.n.x; vx.ny = c.n.y; vx.nz = c.n.z; vx.u = c.u; vx.v = c.vv; vx.color = c.col;
                     out.vertices.push_back(vx);
                     out.skin.push_back(verts[c.v].skin);
                     perMaterial[curFaceMat].push_back(idx);
@@ -439,6 +439,16 @@ export namespace oa
                     {
                         auto n = nums(line, 6);
                         if (n.size() >= 3) corner[faceCorner].n = { n[0], n[1], n[2] };
+                    }
+                    else if (kw == "COLOR" && faceCorner < 3)
+                    {
+                        // per-vertex colour, 0..1 floats: r g b a
+                        auto n = nums(line, 5);
+                        if (n.size() >= 4)
+                        {
+                            auto b8 = [](float v) { return (uint32_t)std::clamp((int)std::lround(v * 255.0f), 0, 255); };
+                            corner[faceCorner].col = (b8(n[3]) << 24) | (b8(n[0]) << 16) | (b8(n[1]) << 8) | b8(n[2]);
+                        }
                     }
                     else if (kw == "UV" && faceCorner < 3)
                     {

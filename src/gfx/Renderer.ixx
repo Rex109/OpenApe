@@ -68,6 +68,7 @@ export namespace oa
         bool tileU = true, tileV = true;
         bool blend = false, additive = false;
         bool doubleSided = false;
+        bool vertexColor = false;   // built-in shading: use the mesh's vertex colours (models), not the material tint
         bool cullFront = false;     // cullFace "Front": the faces turned towards the viewer are the ones dropped
         unsigned CullMode() const { return doubleSided ? 1u : cullFront ? 2u : 3u; }   // D3DCULL_NONE / CW / CCW
         bool alphaTest = false;   // cut-out material: texels with alpha < 128 are discarded
@@ -824,8 +825,9 @@ export namespace oa
             m_dev->SetRenderState(D3DRS_DESTBLEND, s.additive ? D3DBLEND_ONE : D3DBLEND_INVSRCALPHA);
             m_dev->SetRenderState(D3DRS_ZWRITEENABLE, (s.blend || s.additive) ? FALSE : TRUE);
             ApplyMaterialRaster(s);
-            m_dev->SetRenderState(D3DRS_COLORVERTEX, FALSE);
-            m_dev->SetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, D3DMCS_MATERIAL);
+            m_dev->SetRenderState(D3DRS_COLORVERTEX, s.vertexColor ? TRUE : FALSE);
+            m_dev->SetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, s.vertexColor ? D3DMCS_COLOR1 : D3DMCS_MATERIAL);
+            m_dev->SetRenderState(D3DRS_AMBIENTMATERIALSOURCE, s.vertexColor ? D3DMCS_COLOR1 : D3DMCS_MATERIAL);
 
             if (s.color && s.color->tex)
             {

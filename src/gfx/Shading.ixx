@@ -110,7 +110,7 @@ export namespace oa
             std::map<std::string, std::array<float, 4>> consts;
             std::map<std::string, std::string> missing;   // semantic -> why it is absent; only reported if nothing else supplies it
             if (gdt) FromGdt(*gdt, r, maps, consts, missing);
-            if (cm) FromCompiled(*cm, r, maps, consts, missing, gdt != nullptr);
+            if (cm) FromCompiled(*cm, r, maps, consts, missing, gdt);
             for (auto& [sem, why] : missing) if (!maps.count(sem)) r.notes.push_back(why);
 
             if (gdt && ToLower(gdt->GetString("materialType")) == "water")
@@ -449,13 +449,21 @@ export namespace oa
             }
         }
 
-        void FromCompiled(const game::CompiledMaterial& cm, Result& r, std::map<std::string, std::shared_ptr<GpuTexture>>& maps, std::map<std::string, std::array<float, 4>>& consts, std::map<std::string, std::string>& missing, bool gdtIsAuthoritative)
+        void FromCompiled(const game::CompiledMaterial& cm, Result& r, std::map<std::string, std::shared_ptr<GpuTexture>>& maps, std::map<std::string, std::array<float, 4>>& consts, std::map<std::string, std::string>& missing, const gdt::Entry* gdt)
         {
             for (auto& t : cm.textures)
             {
                 if (maps.count(t.semantic) || t.image.empty()) continue;
-                // the GDT is what the user edits: a map removed there stays removed even if the compiled material still has it
-                if (gdtIsAuthoritative && (t.semantic == "colorMap" || t.semantic == "normalMap" || t.semantic == "specularMap" || t.semantic == "detailMap")) continue;
+                // the GDT is what the user edits: a map whose field is empty there stays removed even if the compiled material
+                // still has it. A map the GDT names but whose source file is missing still falls back to the compiled one.
+                if (gdt)
+                {
+                    bool emptyInGdt = (t.semantic == "colorMap" && gdt->GetString("colorMap").empty()) ||
+                                      (t.semantic == "normalMap" && gdt->GetString("normalMap").empty()) ||
+                                      (t.semantic == "detailMap" && gdt->GetString("detailMap").empty()) ||
+                                      (t.semantic == "specularMap" && gdt->GetString("specColorMap").empty() && gdt->GetString("cosinePowerMap").empty());
+                    if (emptyInGdt) continue;
+                }
                 auto tex = ImageByName(t.image);
                 if (tex) maps[t.semantic] = tex;
                 else if (!missing.count(t.semantic)) missing[t.semantic] = "image not found: " + t.image;
