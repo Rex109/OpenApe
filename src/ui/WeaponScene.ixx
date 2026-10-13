@@ -50,7 +50,8 @@ export namespace oa::ui
         {
             std::string field;            // "gunModel", "gunModel2", "handModel", "worldModel3", ...
             std::string model;            // xmodel asset name
-            enum class Role { Hands, Gun, World } role = Role::Gun;
+            // Rocket: the projectile loaded in the launcher (rocketModel), which hangs off the gun's tag_clip
+            enum class Role { Hands, Gun, World, Rocket } role = Role::Gun;
             MeshData data, posed;
             std::unique_ptr<GpuMesh> gpu;
             std::vector<SurfaceStyle> styles;
@@ -91,6 +92,7 @@ export namespace oa::ui
             for (int i = 2; i <= 16; ++i) add("gunModel" + std::to_string(i), Part::Role::Gun);
             add("worldModel", Part::Role::World);
             for (int i = 2; i <= 16; ++i) add("worldModel" + std::to_string(i), Part::Role::World);
+            add("rocketModel", Part::Role::Rocket);
 
             // animations of the weapon: every non-empty *Anim field
             if (auto* def = e.Def())
@@ -117,6 +119,15 @@ export namespace oa::ui
             ComputeBounds();
         }
 
+        // what the current view draws: the hands, the gun and its rocket, or the world models
+        bool InView(const Part& p) const
+        {
+            if (m_view == View::WorldModel) return p.role == Part::Role::World;
+            return p.role == Part::Role::Hands || p.role == Part::Role::Gun || p.role == Part::Role::Rocket;
+        }
+        // parts that are not driven by the animation's skeleton
+        static bool IsStatic(Part::Role r) { return r == Part::Role::World || r == Part::Role::Rocket; }
+
         bool HasRole(Part::Role r) const { for (auto& p : m_parts) if (p->role == r && p->gpu) return true; return false; }
 
         const gdt::Entry* Entry() const { return m_entry; }
@@ -134,7 +145,7 @@ export namespace oa::ui
             m_anim = a; m_currentAnim = name;
             for (auto& p : m_parts)
             {
-                p->bound = (a && p->role != Part::Role::World) ? p->skinner.Bind(p->data, *a) : 0;
+                p->bound = (a && !IsStatic(p->role)) ? p->skinner.Bind(p->data, *a) : 0;
                 if (!a) { p->posed = p->data; p->posedBones = p->data.bones; if (p->gpu) m_renderer.UpdateMesh(*p->gpu, p->posed); }
             }
         }
@@ -160,7 +171,7 @@ export namespace oa::ui
             for (auto& p : m_parts)
             {
                 if (p.get() == hands && m_anim && hands->bound > 0) continue;   // already done
-                if (!p->gpu || p->role == Part::Role::World) { p->attach = Mat4{}; continue; }
+                if (!p->gpu || IsStatic(p->role)) { p->attach = Mat4{}; continue; }
                 if (m_anim && p->bound > 0)
                 {
                     p->skinner.Pose(p->data, *m_anim, frame, loop, p->posedBones, p->role == Part::Role::Gun ? tag : nullptr, p->role == Part::Role::Gun);
@@ -173,6 +184,7 @@ export namespace oa::ui
                     if (p->role == Part::Role::Gun && hands) p->attach = AttachMatrix(*hands, m_anim != nullptr);
                 }
             }
+            PlaceRockets();
         }
 
         // ------------------------------------------------------------------ rendering
@@ -181,8 +193,7 @@ export namespace oa::ui
             for (auto& p : m_parts)
             {
                 if (!p->gpu || !p->visible) continue;
-                bool world = p->role == Part::Role::World;
-                if (world != (m_view == View::WorldModel)) continue;
+                if (!InView(*p)) continue;
                 for (size_t i = 0; i < p->gpu->submeshes.size(); ++i)
                 {
                     Renderer::DrawCall dc{ p->gpu.get(), i, i < p->styles.size() ? p->styles[i] : SurfaceStyle{} };
@@ -199,7 +210,7 @@ export namespace oa::ui
             for (auto& p : m_parts)
             {
                 if (!p->gpu || !p->visible) continue;
-                if ((p->role == Part::Role::World) != (m_view == View::WorldModel)) continue;
+                if (!InView(*p)) continue;
                 const auto& base = (m_anim && p->bound > 0) ? p->posedBones : p->data.bones;
                 int off = (int)out.size();
                 for (auto& b : base)
@@ -242,7 +253,7 @@ export namespace oa::ui
             for (auto& p : m_parts)
             {
                 if (!p->gpu || !p->visible) continue;
-                if ((p->role == Part::Role::World) != (m_view == View::WorldModel)) continue;
+                if (!InView(*p)) continue;
                 const auto& m = p->attach.m;
                 for (auto& v : p->posed.vertices)
                 {
@@ -275,13 +286,13 @@ export namespace oa::ui
             if (ImGui::BeginCombo("##wview", views[(int)m_view]))
             {
                 for (int i = 0; i < 2; ++i)
-                    if (ImGui::Selectable(views[i], (int)m_view == i)) { m_view = (View)i; ComputeBounds(); modelsChanged = true; }
+                    if (ImGui::Selectable(views[i], (int)m_view == i)) { m_view = (View)i; ComputeBounds(); modelsChanged = true; m_viewChanged = true; }
                 ImGui::EndCombo();
             }
             ImGui::SameLine(0, Theme::S(6));
             ImGui::SetNextItemWidth(Theme::S(170));
             const char* cur = m_currentAnim.empty() ? "<no animation>" : m_currentAnim.c_str();
-            ImGui::BeginDisabled(m_view == View::WorldModel);
+            ImGui::BeginDisabled(m_view != View::ViewModel);
             if (ImGui::BeginCombo("##wanim", cur))
             {
                 if (ImGui::Selectable("<no animation>", m_currentAnim.empty())) picked = "-";
@@ -330,6 +341,9 @@ export namespace oa::ui
         gdt::Entry* TakeOpenRequest() { auto* r = m_openRequest; m_openRequest = nullptr; return r; }
 
         View CurrentView() const { return m_view; }
+        void SetView(int v) { if (v >= 0 && v <= 1) { m_view = (View)v; ComputeBounds(); } }
+        // true once after the user switched between view model / world model / projectile (the camera frames the new subject)
+        bool TakeViewChanged() { bool v = m_viewChanged; m_viewChanged = false; return v; }
 
         // ------------------------------------------------------------------ HUD / kill feed
         float HudHeight() const { return Theme::S(150); }
@@ -448,6 +462,35 @@ export namespace oa::ui
             }
         }
 
+        // placement of a bone as a row-vector matrix (v' = v * M): rotation, then the translation
+        static Mat4 BoneMatrix(const Bone& b)
+        {
+            const Quat& q = b.worldRot;
+            Vec3 X = q.Rotate({ 1, 0, 0 }), Y = q.Rotate({ 0, 1, 0 }), Z = q.Rotate({ 0, 0, 1 });
+            Mat4 m;
+            m.m[0][0] = X.x; m.m[0][1] = X.y; m.m[0][2] = X.z;
+            m.m[1][0] = Y.x; m.m[1][1] = Y.y; m.m[1][2] = Y.z;
+            m.m[2][0] = Z.x; m.m[2][1] = Z.y; m.m[2][2] = Z.z;
+            m.m[3][0] = b.worldPos.x; m.m[3][1] = b.worldPos.y; m.m[3][2] = b.worldPos.z;
+            return m;
+        }
+
+        // The loaded rocket sits on the gun's tag_clip, wherever the animation moves that tag.
+        void PlaceRockets()
+        {
+            const Part* gun = nullptr;
+            for (auto& p : m_parts) if (p->role == Part::Role::Gun && p->gpu && p->visible) { gun = p.get(); break; }
+            for (auto& p : m_parts)
+            {
+                if (p->role != Part::Role::Rocket) continue;
+                p->attach = Mat4{};
+                if (!gun) continue;
+                const auto& bones = (m_anim && gun->bound > 0) ? gun->posedBones : gun->data.bones;
+                for (auto& b : bones)
+                    if (IEquals(b.name, "tag_clip")) { p->attach = BoneMatrix(b) * gun->attach; break; }
+            }
+        }
+
         Mat4 AttachMatrix(const Part& hands, bool animated) const
         {
             const std::vector<Bone>& bones = animated ? hands.posedBones : hands.data.bones;
@@ -475,8 +518,8 @@ export namespace oa::ui
             for (auto& p : m_parts)
             {
                 if (!p->gpu || !p->visible) continue;
-                bool world = p->role == Part::Role::World;
-                if (world != (m_view == View::WorldModel)) continue;
+                if (!InView(*p)) continue;
+                if (p->role == Part::Role::Rocket) continue;   // inside the gun's extent, and its model origin is the gun's tag
                 Vec3 a = p->data.boundsMin, b = p->data.boundsMax;
                 // guns hang off the hands' weapon tag: include that offset
                 if (p->role == Part::Role::Gun)
@@ -559,6 +602,7 @@ export namespace oa::ui
         const Animation* m_anim = nullptr;
         HudInfo m_hud;
         View m_view = View::ViewModel;
+        bool m_viewChanged = false;
         Vec3 m_center{};
         float m_radius = 1;
         gdt::Entry* m_openRequest = nullptr;

@@ -360,10 +360,20 @@ export namespace oa::ui
             dl->AddTriangleFilled(P(9.5f, 1.8f), P(13.2f, 5.6f), P(8.0f, 5.8f), col);
             break;
         case Icon::Eye:
-            dl->PathArcTo(P(8, 12.2f), 7.2f * u, -2.35f, -0.79f, 14); dl->PathStroke(col, th * 1.4f);
-            dl->PathArcTo(P(8, 3.8f), 7.2f * u, 0.79f, 2.35f, 14); dl->PathStroke(col, th * 1.4f);
-            dl->AddCircleFilled(P(8, 8), 2.4f * u, col);
+        {
+            // an almond shaped eye: filled lens, dark iris, light pupil
+            ImVec2 pts[24];
+            for (int k = 0; k < 12; ++k)
+            {
+                float t = (float)k / 11.0f, x = 1.0f + 14.0f * t, yo = 4.6f * std::sin(t * 3.14159265f);
+                pts[k] = P(x, 8.0f - yo);
+                pts[23 - k] = P(x, 8.0f + yo);
+            }
+            dl->AddConvexPolyFilled(pts, 24, col);
+            dl->AddCircleFilled(P(8, 8), 3.1f * u, IM_COL32(40, 40, 40, 255));
+            dl->AddCircleFilled(P(8, 8), 1.2f * u, col);
             break;
+        }
         case Icon::Info:
             dl->AddCircleFilled(P(8, 8), 6.6f * u, col);
             dl->AddCircleFilled(P(8, 4.8f), 1.1f * u, IM_COL32(40, 40, 40, 255));

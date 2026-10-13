@@ -103,6 +103,7 @@ export namespace oa
                 else if (a == "--fake-update") { UpdateChecker::Result r; r.state = UpdateChecker::State::Available; r.latest = argv[i + 1]; r.url = "https://github.com/Rex109/OpenApe/releases"; m_update.SetResultForTest(r); }
                 else if (a == "--rename") m_testRename = argv[i + 1];
                 else if (a == "--reload-at") m_testReloadAt = std::atoi(argv[i + 1]);
+                else if (a == "--weapon-view") m_preview->SetWeaponView(std::atoi(argv[i + 1]));
                 else if (a == "--weapon-anim") m_preview->SetWeaponAnim(argv[i + 1]);
             }
             OpenInitialProject(argc, argv, exeDir);

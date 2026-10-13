@@ -54,6 +54,7 @@ export namespace oa::ui
         void SetYaw(float y) { m_yawOverride = y; }
         void SetFrame(int f) { m_pendingFrame = f; }
         void SetWeaponAnim(const std::string& n) { m_pendingWeaponAnim = n; }
+        void SetWeaponView(int v) { m_pendingWeaponView = v; }
         void SetFirstPerson(bool on) { m_fpv = on; }
         void SetShape(int sh) { m_shape = (Shape)std::clamp(sh, 0, 6); m_frameRequested = true; }
         void SetMode(int m) { m_mode = (ShadeMode)std::clamp(m, 0, 3); m_signature.clear(); }
@@ -818,6 +819,7 @@ export namespace oa::ui
             m_isAnim = false;
             for (auto& a : m_weapon->Anims())
                 if (a.field == "idleAnim") { SelectWeaponAnim(a.name); break; }
+            if (m_pendingWeaponView >= 0) m_weapon->SetView(m_pendingWeaponView);
             if (!m_pendingWeaponAnim.empty())
                 for (auto& a : m_weapon->Anims())
                     if (a.field == m_pendingWeaponAnim || a.name == m_pendingWeaponAnim) { SelectWeaponAnim(a.name); break; }
@@ -830,6 +832,7 @@ export namespace oa::ui
             std::string picked = m_weapon->DrawControls(modelsChanged);
             ImGui::SameLine(0, Theme::S(6));
             if (ImGui::Checkbox("HUD", &m_showHud)) {}
+            if (m_weapon->TakeViewChanged()) m_frameRequested = true;
             if (!picked.empty()) SelectWeaponAnim(picked);
             if (auto* open = m_weapon->TakeOpenRequest()) m_session.Open(open);
             if (!m_weaponAnimError.empty()) ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.4f, 1), "%s", m_weaponAnimError.c_str());
@@ -1206,6 +1209,7 @@ export namespace oa::ui
         MeshData m_shapeBase[7];
         bool m_shapeUvDirty[7] = {};
         std::string m_pendingWeaponAnim;
+        int m_pendingWeaponView = -1;
         bool m_fpv = false;
         float m_yawOverride = -100.0f;
         float m_fpvFovDeg = 90.0f, m_orbitFovDeg = 40.0f;
