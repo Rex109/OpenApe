@@ -102,6 +102,64 @@ export namespace oa
             return true;
         }
 
+        // Decodes the top mip of a DXT1/3/5 image to BGRA8 in place (the shaders' special map formats are built on the CPU).
+        static bool ToBgra8(ImageData& img)
+        {
+            if (img.format == PixelFormat::BGRA8) return true;
+            const int w = img.width, h = img.height;
+            const size_t blockBytes = img.format == PixelFormat::DXT1 ? 8 : 16;
+            const size_t bw = (w + 3) / 4, bh = (h + 3) / 4;
+            if (img.pixels.size() < bw * bh * blockBytes) return false;
+            std::vector<uint8_t> out((size_t)w * h * 4);
+            auto expand565 = [](uint16_t c, uint8_t* rgb) {
+                rgb[0] = (uint8_t)(((c >> 11) & 31) * 255 / 31); rgb[1] = (uint8_t)(((c >> 5) & 63) * 255 / 63); rgb[2] = (uint8_t)((c & 31) * 255 / 31);
+            };
+            for (size_t by = 0; by < bh; ++by)
+                for (size_t bx = 0; bx < bw; ++bx)
+                {
+                    const uint8_t* blk = &img.pixels[(by * bw + bx) * blockBytes];
+                    const uint8_t* cb = blk + (blockBytes == 16 ? 8 : 0);
+                    uint16_t c0 = (uint16_t)(cb[0] | (cb[1] << 8)), c1 = (uint16_t)(cb[2] | (cb[3] << 8));
+                    uint8_t pal[4][4];   // r g b a
+                    expand565(c0, pal[0]); expand565(c1, pal[1]); pal[0][3] = pal[1][3] = 255;
+                    if (c0 > c1 || blockBytes == 16)
+                        for (int k = 0; k < 3; ++k)
+                        {
+                            pal[2][k] = (uint8_t)((2 * pal[0][k] + pal[1][k]) / 3); pal[3][k] = (uint8_t)((pal[0][k] + 2 * pal[1][k]) / 3);
+                        }
+                    else
+                        for (int k = 0; k < 3; ++k) { pal[2][k] = (uint8_t)((pal[0][k] + pal[1][k]) / 2); pal[3][k] = 0; }
+                    pal[2][3] = 255; pal[3][3] = (c0 > c1 || blockBytes == 16) ? 255 : 0;
+                    uint32_t idx = cb[4] | (cb[5] << 8) | (cb[6] << 16) | ((uint32_t)cb[7] << 24);
+                    uint8_t alpha[16];
+                    for (int i = 0; i < 16; ++i) alpha[i] = 255;
+                    if (img.format == PixelFormat::DXT3)
+                        for (int i = 0; i < 16; ++i) { uint8_t a4 = (blk[i / 2] >> ((i & 1) * 4)) & 15; alpha[i] = (uint8_t)(a4 * 17); }
+                    else if (img.format == PixelFormat::DXT5)
+                    {
+                        uint8_t a0 = blk[0], a1 = blk[1], tab[8];
+                        tab[0] = a0; tab[1] = a1;
+                        if (a0 > a1) for (int k = 1; k < 7; ++k) tab[k + 1] = (uint8_t)(((7 - k) * a0 + k * a1) / 7);
+                        else { for (int k = 1; k < 5; ++k) tab[k + 1] = (uint8_t)(((5 - k) * a0 + k * a1) / 5); tab[6] = 0; tab[7] = 255; }
+                        uint64_t bits = 0;
+                        for (int k = 0; k < 6; ++k) bits |= (uint64_t)blk[2 + k] << (8 * k);
+                        for (int i = 0; i < 16; ++i) alpha[i] = tab[(bits >> (3 * i)) & 7];
+                    }
+                    for (int py = 0; py < 4; ++py)
+                        for (int px = 0; px < 4; ++px)
+                        {
+                            int x = (int)bx * 4 + px, y = (int)by * 4 + py;
+                            if (x >= w || y >= h) continue;
+                            const uint8_t* c = pal[(idx >> (2 * (py * 4 + px))) & 3];
+                            uint8_t* o = &out[((size_t)y * w + x) * 4];
+                            o[0] = c[2]; o[1] = c[1]; o[2] = c[0]; o[3] = alpha[py * 4 + px];
+                        }
+                }
+            img.pixels = std::move(out);
+            img.format = PixelFormat::BGRA8;
+            return true;
+        }
+
     private:
         static bool LoadStb(const std::vector<unsigned char>& bytes, ImageData& out, std::string& error)
         {

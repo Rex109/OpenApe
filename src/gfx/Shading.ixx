@@ -54,7 +54,7 @@ export namespace oa
             std::string techset;   // what was used, for the status overlay
         };
 
-        void ClearCache() { m_special.clear(); }
+        void ClearCache() { m_special.clear(); m_converted.clear(); }
 
         // "mip standard (2x bilinear)*" | "<auto filter>*" | "bilinear" | "trilinear" | "anisotropic",
         // "mip expensive (4x bilinear)", "mip more expensive (2x trilinear)", "mip most expensive (4x trilinear)",
@@ -110,7 +110,7 @@ export namespace oa
             std::map<std::string, std::array<float, 4>> consts;
             std::map<std::string, std::string> missing;   // semantic -> why it is absent; only reported if nothing else supplies it
             if (gdt) FromGdt(*gdt, r, maps, consts, missing);
-            if (cm) FromCompiled(*cm, r, maps, consts, missing);
+            if (cm) FromCompiled(*cm, r, maps, consts, missing, gdt != nullptr);
             for (auto& [sem, why] : missing) if (!maps.count(sem)) r.notes.push_back(why);
 
             if (gdt && ToLower(gdt->GetString("materialType")) == "water")
@@ -216,6 +216,18 @@ export namespace oa
                     const game::ShaderCode* code = ref == &pass.vertex ? vs : ps;
                     for (auto& b : ref->bindings) Bind(b, *code, maps, consts, sp);
                 }
+                // constants the technique does not bind (envMapParms for the specular term, ...) are filled from the material's
+                // constant table by name, as the game does
+                for (auto* code : { vs, ps })
+                    for (auto& c : code->constants)
+                    {
+                        if (c.regSet != 2) continue;
+                        bool have = false;
+                        for (auto& l : sp.literals) if (l.name == c.name) have = true;
+                        if (have) continue;
+                        auto it = consts.find(c.name);
+                        if (it != consts.end()) sp.literals.push_back({ c.name, it->second });
+                    }
                 // samplers the technique does not bind are fed by the engine at run time (reflection probes, ...): give them a
                 // neutral texture instead of leaving whatever was bound last
                 for (auto& c : ps->constants)
@@ -311,7 +323,8 @@ export namespace oa
                 if (blend.rfind("Blend", 0) == 0) mode = 'b';
                 else if (blend.rfind("Add", 0) == 0) mode = 'a';
                 else if (e.GetString("alphaTest").rfind("GE128", 0) == 0) mode = 't';
-                bool det = !e.GetString("detailMap").empty(), nrm = !e.GetString("normalMap").empty(), spc = !e.GetString("specColorMap").empty();
+                bool det = !e.GetString("detailMap").empty(), nrm = !e.GetString("normalMap").empty();
+                bool spc = !e.GetString("specColorMap").empty() || !e.GetString("cosinePowerMap").empty();
                 std::string base = std::string(1, mode) + "0c0";
                 std::vector<std::string> names;
                 for (const char* pre : { "l_sm_scroll_", "l_sm_" })
@@ -405,34 +418,139 @@ export namespace oa
                 r.style.colorMask = mask;
             }
             consts["colorTint"] = e.GetColor("colorTint");
-            consts["envMapParms"] = { (float)e.GetNumber("envMapMin"), (float)e.GetNumber("envMapMax"), (float)e.GetNumber("envMapExponent"), 0 };
+            // the 4th value is the specular intensity the lit shaders multiply the sun's specular with: 0.625 in every stock material
+            consts["envMapParms"] = { (float)e.GetNumber("envMapMin"), (float)e.GetNumber("envMapMax"), (float)e.GetNumber("envMapExponent"), 0.625f * r.style.specStrength };
             consts["detailScale"] = { (float)e.GetNumber("detailScaleX"), (float)e.GetNumber("detailScaleY"), 0, 0 };
             consts["distortionScale"] = { (float)e.GetNumber("distortionScaleX"), (float)e.GetNumber("distortionScaleY"), 0, 0 };
             consts["waterColor"] = { (float)e.GetNumber("waterColorR"), (float)e.GetNumber("waterColorG"), (float)e.GetNumber("waterColorB"), 1 };
 
             struct Map { const char* key; const char* semantic; };
-            for (auto m : { Map{ "colorMap", "colorMap" }, Map{ "normalMap", "normalMap" }, Map{ "specColorMap", "specularMap" }, Map{ "detailMap", "detailMap" } })
+            for (auto m : { Map{ "colorMap", "colorMap" }, Map{ "normalMap", "normalMap" }, Map{ "detailMap", "detailMap" } })
             {
                 std::string path = e.GetString(m.key);
                 if (path.empty()) continue;
+                if (path[0] == '$') { maps[m.semantic] = Special(path); continue; }
                 auto file = m_project.ResolveFile(path);
                 if (file.empty()) { missing[m.semantic] = std::string(m.key) + " not found: " + path; continue; }
                 std::string err;
-                auto tex = m_renderer.LoadTexture(file, err);
+                // the game stores normal maps in its own packed layout; a plain RGB normal map from the tools is converted
+                auto tex = std::string(m.key) == "normalMap" ? PackedNormalMap(file, err) : m_renderer.LoadTexture(file, err);
                 if (tex) maps[m.semantic] = tex; else missing[m.semantic] = file.filename().string() + ": " + err;
+            }
+            {
+                // the specular map the shaders read is the specular colour with the cosine power (gloss) in its alpha
+                std::string sp = e.GetString("specColorMap"), cp = e.GetString("cosinePowerMap");
+                if (!sp.empty() || !cp.empty())
+                {
+                    std::string err;
+                    auto tex = SpecularWithGloss(sp, cp, err);
+                    if (tex) maps["specularMap"] = tex; else missing["specularMap"] = err;
+                }
             }
         }
 
-        void FromCompiled(const game::CompiledMaterial& cm, Result& r, std::map<std::string, std::shared_ptr<GpuTexture>>& maps, std::map<std::string, std::array<float, 4>>& consts, std::map<std::string, std::string>& missing)
+        void FromCompiled(const game::CompiledMaterial& cm, Result& r, std::map<std::string, std::shared_ptr<GpuTexture>>& maps, std::map<std::string, std::array<float, 4>>& consts, std::map<std::string, std::string>& missing, bool gdtIsAuthoritative)
         {
             for (auto& t : cm.textures)
             {
                 if (maps.count(t.semantic) || t.image.empty()) continue;
+                // the GDT is what the user edits: a map removed there stays removed even if the compiled material still has it
+                if (gdtIsAuthoritative && (t.semantic == "colorMap" || t.semantic == "normalMap" || t.semantic == "specularMap" || t.semantic == "detailMap")) continue;
                 auto tex = ImageByName(t.image);
                 if (tex) maps[t.semantic] = tex;
                 else if (!missing.count(t.semantic)) missing[t.semantic] = "image not found: " + t.image;
             }
             for (auto& c : cm.constants) if (!consts.count(c.name)) consts[c.name] = c.value;
+        }
+
+        // decodes an image file to BGRA8 pixels
+        bool LoadBgra(const fs::path& file, ImageData& img, std::string& err) const
+        {
+            if (!ImageLoader::Load(file, img, err)) return false;
+            if (!ImageLoader::ToBgra8(img)) { err = file.filename().string() + ": cannot decode " + img.description; return false; }
+            return true;
+        }
+
+        static std::string Stamp(const fs::path& file)
+        {
+            std::error_code ec;
+            return file.string() + "|" + std::to_string(fs::last_write_time(file, ec).time_since_epoch().count());
+        }
+
+        // RGB tangent-space normal map -> the game's layout: x in alpha, y in green, both as slopes (x/z, y/z) scaled so that
+        // 130/255 and 129/255 are zero, the way the lit shaders decode them (n = x*T + y*B + N, normalised)
+        std::shared_ptr<GpuTexture> PackedNormalMap(const fs::path& file, std::string& err)
+        {
+            std::string key = "normal|" + Stamp(file);
+            if (auto it = m_converted.find(key); it != m_converted.end()) return it->second;
+            ImageData img;
+            if (!LoadBgra(file, img, err)) { m_converted[key] = nullptr; return nullptr; }
+            for (size_t i = 0; i + 3 < img.pixels.size(); i += 4)
+            {
+                float nx = img.pixels[i + 2] / 127.5f - 1.0f, ny = img.pixels[i + 1] / 127.5f - 1.0f, nz = std::max(img.pixels[i] / 127.5f - 1.0f, 0.25f);
+                float a = 130.0f / 255.0f + (nx / nz) / 4.08f, g = 129.0f / 255.0f + (ny / nz) / 4.06452f;
+                img.pixels[i + 3] = (uint8_t)std::clamp((int)std::lround(a * 255.0f), 0, 255);
+                img.pixels[i + 1] = (uint8_t)std::clamp((int)std::lround(g * 255.0f), 0, 255);
+                img.pixels[i] = 255; img.pixels[i + 2] = 128;
+            }
+            img.hasAlpha = true;
+            auto t = m_renderer.CreateTexture(img);
+            if (!t) err = file.filename().string() + ": could not create the normal map";
+            m_converted[key] = t;
+            return t;
+        }
+
+        // specular colour (RGB) + cosine power map (grey) in the alpha channel
+        std::shared_ptr<GpuTexture> SpecularWithGloss(const std::string& specPath, const std::string& cosPath, std::string& err)
+        {
+            auto solid = [&](const std::string& n, uint8_t& v) { if (n == "$black") v = 0; else if (n == "$gray" || n == "$grey") v = 128; else v = 255; };
+            ImageData spec, cosine;
+            bool haveSpec = false, haveCos = false;
+            fs::path specFile, cosFile;
+            uint8_t specValue = 255;
+            if (!specPath.empty())
+            {
+                if (specPath[0] == '$') solid(specPath, specValue);
+                else
+                {
+                    specFile = m_project.ResolveFile(specPath);
+                    if (specFile.empty()) { err = "specColorMap not found: " + specPath; return nullptr; }
+                    if (!LoadBgra(specFile, spec, err)) return nullptr;
+                    haveSpec = true;
+                }
+            }
+            if (!cosPath.empty() && cosPath[0] != '$')
+            {
+                cosFile = m_project.ResolveFile(cosPath);
+                if (cosFile.empty()) { err = "cosinePowerMap not found: " + cosPath; return nullptr; }
+                if (!LoadBgra(cosFile, cosine, err)) return nullptr;
+                haveCos = true;
+            }
+            std::string key = "spec|" + specPath + "|" + cosPath + "|" + (haveSpec ? Stamp(specFile) : "") + "|" + (haveCos ? Stamp(cosFile) : "");
+            if (auto it = m_converted.find(key); it != m_converted.end()) return it->second;
+            ImageData out;
+            out.format = PixelFormat::BGRA8;
+            out.width = haveSpec ? spec.width : haveCos ? cosine.width : 4;
+            out.height = haveSpec ? spec.height : haveCos ? cosine.height : 4;
+            out.pixels.resize((size_t)out.width * out.height * 4);
+            for (int y = 0; y < out.height; ++y)
+                for (int x = 0; x < out.width; ++x)
+                {
+                    uint8_t* o = &out.pixels[((size_t)y * out.width + x) * 4];
+                    if (haveSpec) { const uint8_t* s = &spec.pixels[((size_t)y * spec.width + x) * 4]; o[0] = s[0]; o[1] = s[1]; o[2] = s[2]; }
+                    else o[0] = o[1] = o[2] = specValue;
+                    if (haveCos)
+                    {
+                        int cx = x * cosine.width / out.width, cy = y * cosine.height / out.height;
+                        o[3] = cosine.pixels[((size_t)cy * cosine.width + cx) * 4 + 2];   // the grey value (red)
+                    }
+                    else o[3] = 128;   // a medium gloss when no cosine power map is given
+                }
+            out.hasAlpha = true;
+            auto t = m_renderer.CreateTexture(out);
+            if (!t) err = "could not create the specular map";
+            m_converted[key] = t;
+            return t;
         }
 
         std::shared_ptr<GpuTexture> ImageByName(const std::string& name)
@@ -548,6 +666,7 @@ export namespace oa
         Project& m_project;
         const IwdArchive& m_iwds;
         std::map<std::string, std::shared_ptr<GpuTexture>> m_special;
+        std::map<std::string, std::shared_ptr<GpuTexture>> m_converted;   // normal / specular maps built from GDT images
         struct MapState { bool tileU = true, tileV = true; SurfaceStyle::Filter filter = SurfaceStyle::Filter::Default; };
         std::map<std::string, MapState> m_mapState;   // by semantic, filled from the GDT of the material being built
     };
