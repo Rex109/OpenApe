@@ -9,7 +9,7 @@ export module openape.version;
 // The version of this build (x.x.x) and the git state it was built from.
 export namespace oa::version
 {
-    inline constexpr const char* kVersion = "1.0.0";
+    inline constexpr const char* kVersion = "1.1.0";
     inline constexpr const char* kCommit = OPENAPE_COMMIT;
     inline constexpr int kCommitCount = OPENAPE_COMMIT_COUNT;
     inline constexpr bool kDirty = OPENAPE_DIRTY != 0;
@@ -42,7 +42,7 @@ export namespace oa::version
         return s;
     }
 
-    // "1.0.0 (build 12, 83c50f6, dirty)"
+    // "1.1.0 (build 12, 83c50f6, dirty)"
     inline std::string Describe()
     {
         std::string s = kVersion;

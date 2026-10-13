@@ -202,7 +202,9 @@ export namespace oa::ui
             float tx = std::sin(a1), ty = -std::cos(a1);
             float ex = cx + r * std::cos(a1), ey = cy + r * std::sin(a1);
             float nx = -ty, ny = tx, hl = 3.6f, hw = 3.2f;
-            dl->AddTriangleFilled(P(X(ex + tx * hl), ey + ty * hl), P(X(ex + nx * hw), ey + ny * hw), P(X(ex - nx * hw), ey - ny * hw), col);
+            // mirroring reverses the winding, which ImGui fills badly: swap two corners for the mirrored icon
+            ImVec2 tip = P(X(ex + tx * hl), ey + ty * hl), c1 = P(X(ex + nx * hw), ey + ny * hw), c2 = P(X(ex - nx * hw), ey - ny * hw);
+            if (undo) dl->AddTriangleFilled(tip, c1, c2, col); else dl->AddTriangleFilled(tip, c2, c1, col);
             break;
         }
         case Icon::Back:
