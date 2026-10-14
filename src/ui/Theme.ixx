@@ -258,10 +258,20 @@ export namespace oa::ui
             dl->AddCircleFilled(P(8, 8.8f), 1.6f * u, IM_COL32(120, 160, 220, 255));
             break;
         case Icon::Wire:
-            dl->AddRect(P(2.5f, 4.5f), P(11.5f, 13.5f), col, 0.0f, th);
-            dl->AddRect(P(5, 2.5f), P(13.5f, 11), col, 0.0f, th);
-            dl->AddLine(P(2.5f, 4.5f), P(5, 2.5f), col, th); dl->AddLine(P(11.5f, 13.5f), P(13.5f, 11), col, th);
+        {
+            // a wireframe cube seen corner-on: hexagon outline plus the three edges meeting at the near corner
+            const float cx = 8.0f, cy = 8.4f, r = 6.4f, lw = th * 1.35f;
+            ImVec2 v[6];
+            for (int k = 0; k < 6; ++k)
+            {
+                float a = (-90.0f + 60.0f * k) * 3.14159265f / 180.0f;
+                v[k] = P(cx + r * std::cos(a), cy + r * std::sin(a));
+            }
+            for (int k = 0; k < 6; ++k) dl->AddLine(v[k], v[(k + 1) % 6], col, lw);
+            ImVec2 c = P(cx, cy);
+            for (int k = 1; k < 6; k += 2) dl->AddLine(c, v[k], col, lw);
             break;
+        }
         case Icon::Grid:
             for (int i = 0; i < 4; ++i)
             {
