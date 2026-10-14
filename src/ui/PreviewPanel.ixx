@@ -340,7 +340,7 @@ export namespace oa::ui
             if (hover && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) m_panning = true;
             if (!io.MouseDown[0]) m_orbiting = false;
             if (!io.MouseDown[2]) m_panning = false;
-            if (m_fpv && m_kind == Kind::Weapon) { m_orbiting = false; m_panning = false; }
+            if (m_cam.firstPerson) { m_orbiting = false; m_panning = false; }   // only while the in-game camera is actually active
             if (m_orbiting)
             {
                 m_cam.yaw -= io.MouseDelta.x * 0.01f;
@@ -699,6 +699,9 @@ export namespace oa::ui
             float ic = Theme::S(16);
             int last = std::max(m_anim.numFrames - 1, 0);
             int frame = (int)m_frame;
+            // the world model is static: the animation controls do not apply to it
+            const bool staticView = m_kind == Kind::Weapon && m_weapon->CurrentView() == WeaponScene::View::WorldModel;
+            ImGui::BeginDisabled(staticView);
             if (IconButton("tl_first", Icon::Prev, ic, "Previous frame")) { m_playing = false; m_frame = (float)std::max(frame - 1, 0); }
             ImGui::SameLine(0, 2);
             if (IconButton("tl_play", m_playing ? Icon::Pause : Icon::Play, ic, m_playing ? "Pause" : "Play", m_playing))
@@ -768,6 +771,7 @@ export namespace oa::ui
                 ImGui::EndPopup();
             }
             skip_skeleton:;
+            ImGui::EndDisabled();
         }
 
         // ------------------------------------------------------------------ weapons
@@ -818,7 +822,7 @@ export namespace oa::ui
             // start on the idle animation when it can be shown
             m_isAnim = false;
             for (auto& a : m_weapon->Anims())
-                if (a.field == "idleAnim") { SelectWeaponAnim(a.name); break; }
+                if (a.field == "idleAnim") { SelectWeaponAnim(a.name); m_playing = false; break; }   // the idle pose is shown paused
             if (m_pendingWeaponView >= 0) m_weapon->SetView(m_pendingWeaponView);
             if (!m_pendingWeaponAnim.empty())
                 for (auto& a : m_weapon->Anims())
@@ -832,7 +836,11 @@ export namespace oa::ui
             std::string picked = m_weapon->DrawControls(modelsChanged);
             ImGui::SameLine(0, Theme::S(6));
             if (ImGui::Checkbox("HUD", &m_showHud)) {}
-            if (m_weapon->TakeViewChanged()) m_frameRequested = true;
+            if (m_weapon->TakeViewChanged())
+            {
+                m_frameRequested = true;
+                if (m_weapon->CurrentView() == WeaponScene::View::WorldModel) m_playing = false;   // the world model has no animation
+            }
             if (!picked.empty()) SelectWeaponAnim(picked);
             if (auto* open = m_weapon->TakeOpenRequest()) m_session.Open(open);
             if (!m_weaponAnimError.empty()) ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.4f, 1), "%s", m_weaponAnimError.c_str());
