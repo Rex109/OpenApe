@@ -117,11 +117,7 @@ export namespace oa::ui
                         ImGui::SeparatorText(pass == 0 ? "Single player" : "Multiplayer");
                         for (int i = 0; i < (int)all.size(); ++i)
                             if (all[i].multiplayer == (pass == 1) && ImGui::MenuItem(all[i].name, nullptr, m_lightIndex == i && m_presetIndex < 0))
-                            {
-                                ApplyLight(i);
-                                auto sky = SkyForMap(all[i].name, SkyNames());   // pick the sky that belongs to that map
-                                if (!sky.empty()) ApplySky(sky);
-                            }
+                                ApplyLight(i);   // the lighting only: the sky box has its own menu
                     }
                     ImGui::EndMenu();
                 }

@@ -357,7 +357,7 @@ export namespace oa::ui
                 DrawIcon(dl, icon, ImVec2(ix, p.y + (rowH - Theme::S(14)) * 0.5f), Theme::S(14), c1, c2);
                 dl->AddText(ImVec2(ix + Theme::S(20), ty), textCol, r.e->Name().c_str());
                 if (m_s.IsFavorite(*r.e))
-                    DrawIcon(dl, Icon::StarFilled, ImVec2(width - Theme::S(24), p.y + (rowH - Theme::S(12)) * 0.5f), Theme::S(12), 0);
+                    DrawIcon(dl, Icon::StarFilled, ImVec2(x + Theme::S(7), p.y + (rowH - Theme::S(12)) * 0.5f), Theme::S(12), 0);   // in the empty slot left of the type icon
                 if (clicked)
                 {
                     if (ImGui::GetIO().KeyCtrl) m_s.OpenInNewTab(r.e); else m_s.Open(r.e);
